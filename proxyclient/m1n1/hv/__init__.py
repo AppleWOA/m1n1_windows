@@ -1829,7 +1829,7 @@ class HV(Reloadable):
 
         pmgr = self.adt["/arm-io/pmgr"]
         dev_by_name = {dev.name: dev for dev in pmgr.devices}
-        dev_by_id = {dev.id: dev for dev in pmgr.devices}
+        dev_by_id = {self.adt.pmgr_dev_get_id(dev): dev for dev in pmgr.devices}
 
         pmgr_hooks = []
 
@@ -1838,7 +1838,7 @@ class HV(Reloadable):
             if dev.psidx or dev.psreg:
                 addr = pmgr.get_reg(ps.reg)[0] + ps.offset + dev.psidx * 8
                 pmgr_hooks.append(addr)
-                for idx in dev.parents:
+                for idx in self.adt.pmgr_dev_get_parents(dev):
                     if idx in dev_by_id:
                         hook_pmgr_dev(dev_by_id[idx])
 
@@ -1959,6 +1959,8 @@ class HV(Reloadable):
                            "/arm-io/dart-apciec%d",
                            "/arm-io/apciec%d-piodma",
                            "/arm-io/i2c0/hpmBusManager/hpm%d",
+                           "/arm-io/i2c0/hpmBusManager1/hpm%d",
+                           "/arm-io/i2c3/hpmBusManager0/hpm%d",
                            "/arm-io/nub-spmi-a0/hpm%d",
                            "/arm-io/atc%d-dpxbar",
                            "/arm-io/atc%d-dpphy",

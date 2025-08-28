@@ -138,10 +138,21 @@ void exception_initialize(void)
         msr(CNTP_CTL_EL02, 7L);
         msr(CNTV_CTL_EL02, 7L);
     }
-    if (cpufeat_fast_ipi) {
+    if (cpu_features->fast_ipi) {
         reg_clr(SYS_IMP_APL_PMCR0, PMCR0_IACT | PMCR0_IMODE_MASK);
-        reg_clr(SYS_IMP_APL_UPMCR0, UPMCR0_IMODE_MASK);
         msr(SYS_IMP_APL_IPI_SR_EL1, IPI_SR_PENDING);
+    }
+
+    switch (cpu_features->uncore_version) {
+        case UNCORE_V1:
+            reg_clr(SYS_IMP_APL_UPMCR0, UPMCR0_IMODE_T8015);
+            break;
+        case UNCORE_V2:
+            reg_clr(SYS_IMP_APL_UPMCR0, UPMCR0_IMODE_T8020);
+            break;
+        case UNCORE_NONE: // In boot CPU's EL3 cpu_features is not initialized yet but it is 0 on
+                          // machines with EL3 anyways
+            break;
     }
 
     if (is_boot_cpu())
@@ -223,12 +234,12 @@ void print_regs(u64 *regs, int el12)
     if (is_ecore()) {
         printf("E_LSU_ERR_STS: 0x%lx\n", mrs(SYS_IMP_APL_E_LSU_ERR_STS));
         printf("E_FED_ERR_STS: 0x%lx\n", mrs(SYS_IMP_APL_E_FED_ERR_STS));
-        if (cpufeat_fast_ipi)
+        if (cpu_features->fast_ipi)
             printf("E_MMU_ERR_STS: 0x%lx\n", mrs(SYS_IMP_APL_E_MMU_ERR_STS));
     } else {
         printf("LSU_ERR_STS: 0x%lx\n", mrs(SYS_IMP_APL_LSU_ERR_STS));
         printf("FED_ERR_STS: 0x%lx\n", mrs(SYS_IMP_APL_FED_ERR_STS));
-        if (cpufeat_fast_ipi)
+        if (cpu_features->fast_ipi)
             printf("MMU_ERR_STS: 0x%lx\n", mrs(SYS_IMP_APL_MMU_ERR_STS));
     }
 }
@@ -409,17 +420,31 @@ void exc_fiq(u64 *regs)
         reg_clr(SYS_IMP_APL_PMCR0, PMCR0_IACT | PMCR0_IMODE_MASK);
     }
 
-    if (cpufeat_fast_ipi) {
-        reg = mrs(SYS_IMP_APL_UPMCR0);
-        if ((reg & UPMCR0_IMODE_MASK) == UPMCR0_IMODE_FIQ &&
-            (mrs(SYS_IMP_APL_UPMSR) & UPMSR_IACT)) {
-            printf("  UPMC IRQ, masking\n");
-            reg_clr(SYS_IMP_APL_UPMCR0, UPMCR0_IMODE_MASK);
-        }
-
+    if (cpu_features->fast_ipi) {
         if (mrs(SYS_IMP_APL_IPI_SR_EL1) & IPI_SR_PENDING) {
             printf("  Fast IPI IRQ, clearing\n");
             msr(SYS_IMP_APL_IPI_SR_EL1, IPI_SR_PENDING);
+        }
+    }
+
+    if (cpu_features->uncore_version) {
+        uint64_t upmcr0_imode = 0;
+        switch (cpu_features->uncore_version) {
+            case UNCORE_V1:
+                upmcr0_imode = UPMCR0_IMODE_T8015;
+                break;
+            case UNCORE_V2:
+                upmcr0_imode = UPMCR0_IMODE_T8020;
+                break;
+            case UNCORE_NONE:
+                __builtin_unreachable();
+        }
+
+        reg = mrs(SYS_IMP_APL_UPMCR0);
+        if (FIELD_GET(upmcr0_imode, reg) == UPMCR0_IMODE_FIQ &&
+            (mrs(SYS_IMP_APL_UPMSR) & UPMSR_IACT)) {
+            printf("  UPMC IRQ, masking\n");
+            reg_clr(SYS_IMP_APL_UPMCR0, upmcr0_imode);
         }
     }
 

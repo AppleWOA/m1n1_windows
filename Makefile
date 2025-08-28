@@ -67,10 +67,14 @@ endif
 # Required for no_std + alloc for now
 export RUSTC_BOOTSTRAP=1
 RUST_LIB := librust.a
-RUST_LIBS :=
 ifeq ($(CHAINLOADING),1)
 CFG += CHAINLOADING
-RUST_LIBS += $(RUST_LIB)
+endif
+
+ifeq ($(BUILDSTD),1)
+CARGO_FLAGS := -Z build-std=alloc,core
+else
+CARGO_FLAGS :=
 endif
 
 LDFLAGS := -EL -maarch64elf --no-undefined -X -Bsymbolic \
@@ -162,7 +166,7 @@ OBJECTS := \
 	vsprintf.o \
 	wdt.o \
 	$(DCP_OBJECTS) \
-	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS) $(RUST_LIBS)
+	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS) $(RUST_LIB)
 
 FP_OBJECTS := \
 	kboot_gpu.o \
@@ -197,7 +201,7 @@ build/$(RUST_LIB): rust/src/* rust/*
 	$(QUIET)echo "  RS    $@"
 	$(QUIET)mkdir -p $(DEPDIR)
 	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)cargo build --target $(RUSTARCH) --lib --release --manifest-path rust/Cargo.toml --target-dir build
+	$(QUIET)cargo build $(CARGO_FLAGS) --target $(RUSTARCH) --lib --release --manifest-path rust/Cargo.toml --target-dir build
 	$(QUIET)cp "build/$(RUSTARCH)/release/${RUST_LIB}" "$@"
 
 build/%.o: src/%.S

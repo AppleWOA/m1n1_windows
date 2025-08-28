@@ -168,7 +168,7 @@ static void *load_kernel(void *p, size_t size)
 #ifdef CHAINLOADING
 static size_t chosen_cnt = 1;
 static char *chosen[MAX_CHOSEN_VARS] = {
-    "chosen.m1n1-stage1-version=" BUILD_TAG,
+    "chosen.asahi,m1n1-stage1-version=" BUILD_TAG,
 };
 #else
 static size_t chosen_cnt = 0;
@@ -304,8 +304,6 @@ int payload_run(void)
         return -1;
     }
 
-    chosen_cnt = 0;
-
     void *p = _payload_start;
 
     while (p)
@@ -335,10 +333,12 @@ int payload_run(void)
 
         for (size_t i = 0; i < chosen_cnt; i++) {
             char *val = memchr(chosen[i], '=', MAX_VAR_NAME + 1);
+            char var[MAX_VAR_NAME + 1];
 
             assert(val);
-            val[0] = 0; // Terminate var name
-            if (kboot_set_chosen(chosen[i] + 7, val + 1) < 0)
+            memcpy(var, chosen[i], val - chosen[i]);
+            var[val - chosen[i]] = 0; // Terminate var name
+            if (kboot_set_chosen(var + 7, val + 1) < 0)
                 printf("Failed to kboot set %s='%s'\n", chosen[i], val);
         }
 

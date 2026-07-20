@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025, amarioguy (AppleWOA authors).
+ * Copyright (c) 2025, NTASP authors.
  * 
  * Module Name:
  *     hv_vgic.c

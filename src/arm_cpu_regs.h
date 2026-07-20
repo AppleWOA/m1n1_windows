@@ -181,7 +181,16 @@
 #define HCR_VM       BIT(0)
 
 #define ID_AA64PFR0_EL1        sys_reg(3, 0, 0, 4, 0)
+#define ID_AA64PFR0_EL1_GIC    GENMASK(27, 24) //defines what version of the GIC System Register interface is supported.
+#define ID_AA64PFR1_EL1        sys_reg(3, 0, 0, 4, 1)
+#define ID_AA64DFR0_EL1        sys_reg(3, 0, 0, 5, 0)
+#define ID_AA64DFR1_EL1        sys_reg(3, 0, 0, 5, 1)
+#define ID_AA64ISAR0_EL1        sys_reg(3, 0, 0, 6, 0)
+#define ID_AA64ISAR1_EL1        sys_reg(3, 0, 0, 6, 1)
+#define ID_AA64AFR0_EL1        sys_reg(3, 0, 0, 5, 4)
+#define ID_AA64AFR1_EL1        sys_reg(3, 0, 0, 5, 5)
 #define SYS_ID_AA64MMFR0_EL1   sys_reg(3, 0, 0, 7, 0)
+#define SYS_ID_AA64MMFR1_EL1   sys_reg(3, 0, 0, 7, 1)
 #define ID_AA64MMFR0_ECV       GENMASK(63, 60)
 #define ID_AA64MMFR0_FGT       GENMASK(59, 56)
 #define ID_AA64MMFR0_ExS       GENMASK(47, 44)

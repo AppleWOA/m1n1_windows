@@ -894,6 +894,33 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
                 printf("HV PMUv3 Redirect (skipped write): msr PMUSERENR_EL0, x%ld = 0x%lx\n", rt, regs[rt]);
             }
            return true;
+        
+        //
+        // m1n1_windows change: since we're now going to be setting HCR_EL2.TID3 (to avoid maintaining a fork of ArmGicDxe in the Mu UEFI port)
+        // we need to pass through all the other registers except ID_AA64PFR0_EL1 (because that register needs to have the bit OR'ed in that tells UEFI that we support a "GIC")
+        //
+        SYSREG_PASS(ID_AA64PFR1_EL1)
+        SYSREG_PASS(ID_AA64DFR0_EL1)
+        SYSREG_PASS(ID_AA64DFR1_EL1)
+        SYSREG_PASS(ID_AA64ISAR0_EL1)
+        SYSREG_PASS(ID_AA64ISAR1_EL1)
+        SYSREG_PASS(SYS_ID_AA64MMFR0_EL1)
+        SYSREG_PASS(SYS_ID_AA64MMFR1_EL1)
+        SYSREG_PASS(ID_AA64AFR0_EL1)
+        SYSREG_PASS(ID_AA64AFR1_EL1)
+        case SYSREG_ISS(ID_AA64PFR0_EL1):
+            if(is_read) {
+                //
+                // need to OR in bit 24 to the register.
+                // the (1 << 24) here makes the guest see that the MSR is reporting the GICv3 sysreg interface
+                //
+                regs[rt] = _mrs(sr_tkn(ID_AA64PFR0_EL1)) | (1 << 24);
+            }
+            else {
+                //
+                // this register is architecturally RO, nothing should *ever* be attempting to write this.
+                //
+            }
         // SYSREG_MAP(SYS_PMXEVCNTR_EL0, SYS_IMP_APL_PMC2)
         // case SYSREG_ISS(SYS_PMXEVTYPER_EL0):
         //     if(is_read) {

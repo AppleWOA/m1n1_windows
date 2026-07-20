@@ -894,10 +894,12 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
                 printf("HV PMUv3 Redirect (skipped write): msr PMUSERENR_EL0, x%ld = 0x%lx\n", rt, regs[rt]);
             }
            return true;
-        
+#ifdef ENABLE_VGIC_MODULE
         //
         // m1n1_windows change: since we're now going to be setting HCR_EL2.TID3 (to avoid maintaining a fork of ArmGicDxe in the Mu UEFI port)
-        // we need to pass through all the other registers except ID_AA64PFR0_EL1 (because that register needs to have the bit OR'ed in that tells UEFI that we support a "GIC")
+        // we need to pass through all the other registers except ID_AA64PFR0_EL1 (because that register needs to have the bit OR'ed in that tells UEFI that we support 
+        // the GICv3 sysreg interface)
+        // Note that this only applies if the vGIC is being used, these registers should not be trapped otherwise.
         //
         SYSREG_PASS(ID_AA64PFR1_EL1)
         SYSREG_PASS(ID_AA64DFR0_EL1)
@@ -921,6 +923,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
                 // this register is architecturally RO, nothing should *ever* be attempting to write this.
                 //
             }
+#endif
         // SYSREG_MAP(SYS_PMXEVCNTR_EL0, SYS_IMP_APL_PMC2)
         // case SYSREG_ISS(SYS_PMXEVTYPER_EL0):
         //     if(is_read) {

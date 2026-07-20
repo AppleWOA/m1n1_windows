@@ -73,6 +73,7 @@ void hv_init(void)
     // UNKNOWN: do we need to bring TGE back? might have misunderstood why it was there at the start.
     // leaving it off for now.
     //
+#ifndef ENABLE_VGIC_MODULE
     hv_write_hcr(HCR_API | // Allow PAuth instructions
                  HCR_APK | // Allow PAuth key registers
                  HCR_TEA | // Trap external aborts
@@ -82,6 +83,18 @@ void hv_init(void)
                  HCR_IMO | // Trap IRQ exceptions (for now)
                  HCR_FMO | // Trap FIQ exceptions (effectively required for now)
                  HCR_VM);  // Enable stage 2 translation
+#else
+    hv_write_hcr(HCR_API | // Allow PAuth instructions
+                 HCR_APK | // Allow PAuth key registers
+                 HCR_TEA | // Trap external aborts
+                 HCR_RW |  // AArch64 guest
+                 HCR_TSC | // Trap SMC exceptions (only writable on Blizzard/Avalanche cores as the previous generations used a chicken bit for this.)
+                 HCR_TID3 | // Trap ID group 3 registers (AA64 PFR, MMFR, ISAR, AFR ID registers) - required to support the vanilla ArmGicDxe UEFI driver.
+                 HCR_AMO | // Trap SError exceptions
+                 HCR_IMO | // Trap IRQ exceptions (for now)
+                 HCR_FMO | // Trap FIQ exceptions (effectively required for now)
+                 HCR_VM);  // Enable stage 2 translation
+#endif
 
     // No guest vectors initially
     msr(VBAR_EL12, 0);

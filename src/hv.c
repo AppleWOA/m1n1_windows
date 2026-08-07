@@ -70,8 +70,7 @@ void hv_init(void)
     // Configure hypervisor defaults
 
     //
-    // UNKNOWN: do we need to bring TGE back? might have misunderstood why it was there at the start.
-    // leaving it off for now.
+    // If the vGIC is being used, TID3 needs to be set to advertise to guest OSes that the platform supports a GIC.
     //
 #ifndef ENABLE_VGIC_MODULE
     hv_write_hcr(HCR_API | // Allow PAuth instructions

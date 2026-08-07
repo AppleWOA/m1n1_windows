@@ -54,7 +54,7 @@
  * - 3 level affinity (aff2/aff1/aff0 valid, aff3 invalid/reserved as 0)
  * - legacy operation is not supported (ICC_SRE_EL2.SRE is reserved, set to 1) (no GICv2 operations)
  * - TDIR bit is supported (FEAT_GICv3_TDIR)
- * - extended SPI and PPI ranges are *not* supported on M1/M2 (and their Pro counterparts, even if the SoC itself has > 16 cores)
+ * - extended SPI and PPI ranges are not supported on the CPU interface per ICC_CTLR_EL1.ExtRange
  * - 8 list registers
  * - direct injection of virtual interrupts are not supported (not a GICv4, and by extension, no NMIs supported)
  * - IRQ/FIQ bypass are not supported
@@ -68,6 +68,11 @@
  * the tentative solution is to do routing to any virtual CPU once we receive an IRQ, we can't assume
  * that the core that got the IRQ is the one that needs to be signaled. (for FIQs, because they're core specific,
  * we'll know which core needs to be signaled in those cases.)
+ * 
+ * If extended SPIs are enabled via the define, *right now* the plan is to not enable trapping of the CPU
+ * interface registers (this would be needed typically to make the view of the CPU interface and distributor consistent)
+ * but right now we'd like to not trap these registers in vGIC mode so as to not tank the performance of the vGIC.
+ * Note that if Linux is the guest, this will trip the warn in gic_cpu_init but it shouldn't be a major concern either way.
  * 
  */
 #ifdef ENABLE_VGIC_MODULE
@@ -231,11 +236,11 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
                 if((((gicd_ctlr_new_val & BIT(7)) != 0) && ((distributor->gicd_ctl_reg & BIT(7)) == 0)) 
                 || (((gicd_ctlr_new_val & BIT(7)) == 0) && ((distributor->gicd_ctl_reg & BIT(7)) != 0))) {
                     //
-                    // the guest is trying to set EN1WF either way. we need to know about any attempt to change this, as it affects IRQ behavior.
+                    // the guest is trying to set E1NWF either way. we need to know about any attempt to change this, as it affects IRQ behavior.
                     // we also need to flag that RWP needs to be set to 1.
                     //
                     is_rwp_to_be_set = true;
-                    vgic_log("HV vGIC DEBUG [INFO]: guest is changing EN1WF\n");
+                    vgic_log("HV vGIC DEBUG [INFO]: guest is changing E1NWF\n");
                 }
                 if(((gicd_ctlr_new_val & BIT(1)) == 0) && ((distributor->gicd_ctl_reg & BIT(1)) != 0)) {
                     //
@@ -347,6 +352,25 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
                 vgic_log("HV vGIC DEBUG [INFO] [Distributor]: interrupt routing register %d = %d\n", reg_num, cpu_num);
                 register_handled = true;
                 break;
+#ifdef EXTENDED_SPI_ENABLE
+            case GIC_DIST_IROUTER0E ... GIC_DIST_IROUTER1023E:
+                u32 reg_num;
+                u64 mpidr = 0;
+                u32 cpu_num;
+                reg_num = (relative_addr - GIC_DIST_IROUTER0E) / 8;
+                distributor->gicd_interrupt_router_ext_spi_range_regs[reg_num] = *val;
+                
+                mpidr |= (u64)MPIDR_AFF0(*val);
+                mpidr |= (u64)MPIDR_AFF1(*val) << 8;
+                mpidr |= (u64)MPIDR_AFF2(*val) << 16;
+                mpidr |= (u64)MPIDR_AFF3(*val) << 32;
+                cpu_num = smp_get_id(mpidr);
+
+                aic_set_affinity(reg_num + 32, cpu_num);
+                vgic_log("HV vGIC DEBUG [INFO] [Distributor]: interrupt routing register (extended-SPI range) %d = %d\n", reg_num, cpu_num);
+                register_handled = true;
+                break;
+#endif
             default:
                 //
                 // we're dealing with a register that is banked n times, we need to get to the if statements.
@@ -437,7 +461,7 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
                     value_ic_enabler &= ~BIT(i);      
                     irq_num = (32 * reg_num) + i;
 
-                    aic_set_mask(irq_num, false);
+                    aic_set_mask(irq_num, true);
                     vgic_log("HV vGIC DEBUG [Info] [AIC]: masking irq %d\n", irq_num);
                 }
             }
@@ -638,6 +662,287 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
             register_handled = true;
             //unimplemented_reg_accessed = true;
         }
+#ifdef EXTENDED_SPI_ENABLE
+        //
+        // For the extended SPI ranges, because architecturally these interrupts start from 4096, it is not possible to entirely preserve
+        // the one-to-one mapping rule we had for AIC-GIC translation.
+        // If extended SPIs are enabled, AIC IRQs 0-1019 remain mapped one to one, while AIC IRQ 1020 and onwards map onto
+        // GIC IRQs 4096-5119
+        //
+        else if((register_handled == false) && (relative_addr >= GIC_DIST_IGROUPR0E) && (relative_addr <= GIC_DIST_IGROUPR31E) ) {
+            //
+            // the guest is trying to change the group of a given interrupt in the extended-SPI range.
+            //
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_IGROUPR0E) / 4;
+
+            //
+            // IGROUPR0E-IGROUPR7E are not banked, unlike their non-E equivalents.
+            //
+
+            distributor->gicd_interrupt_group_regs_ext_spi_range[reg_num] = *val;
+            register_handled = true;
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ISENABLER0E) && (relative_addr <= GIC_DIST_ISENABLER31E) ) {
+            //
+            // enables an IRQ to be forwarded to a CPU interface.
+            //
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_ISENABLER0E) / 4;
+            u32 value_is_enabler, value_ic_enabler, current_val;
+            u32 irq_num;
+            value_is_enabler = distributor->gicd_interrupt_set_enable_ext_spi_range_regs[reg_num];
+            value_ic_enabler = distributor->gicd_interrupt_clear_enable_ext_spi_range_regs[reg_num];
+            current_val = *val;
+
+            //
+            // if 1 is written to the bits in these registers, they need to read 1 in GICD_ISENABLER[0:31]E as well.
+            //
+            // There has to be a way more efficient way of doing this...
+            //
+
+            for(u32 i = 0; i < 32; i++) {
+                if( ( (current_val & BIT(i)) != 0 ) && ( ( value_is_enabler & BIT(i) ) == 0) ) {
+                    value_is_enabler |= BIT(i);
+                    value_ic_enabler |= BIT(i);      
+                    irq_num = ((32 * reg_num) + 4096) + i;
+
+                    aic_set_mask((irq_num-3076), false);
+                    vgic_log("HV vGIC DEBUG [Info] [AIC]: unmasking irq %d (maps to GIC IRQ %d)\n", (irq_num-3076), irq_num);
+                }
+            }
+            if(reg_num == 0) {
+
+            }
+            else {
+                distributor->gicd_interrupt_set_enable_ext_spi_range_regs[reg_num] = value_is_enabler;
+                distributor->gicd_interrupt_clear_enable_ext_spi_range_regs[reg_num] = value_ic_enabler;
+            }
+
+            register_handled = true;
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ICENABLER0E) && (relative_addr <= GIC_DIST_ICENABLER31E) ) {
+            //
+            // disables an IRQ to be forwarded to a CPU interface.
+            //
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_ICENABLER0E) / 4;
+            u32 irq_num;
+            u32 value_is_enabler, value_ic_enabler, current_val;
+            value_is_enabler = distributor->gicd_interrupt_set_enable_ext_spi_range_regs[reg_num];
+            value_ic_enabler = distributor->gicd_interrupt_clear_enable_ext_spi_range_regs[reg_num];
+            current_val = *val;
+
+            //
+            // if 1 is written to the bits in these registers, they need to read 0 in GICD_ICENABLER[0:31]E as well.
+            //
+            // There has to be a way more efficient way of doing this...
+            //
+            for(u32 i = 0; i < 32; i++) {
+                if( ( (current_val & BIT(i)) != 0 ) && ( ( value_ic_enabler & BIT(i) ) != 0) ) {
+                    value_is_enabler &= ~BIT(i);
+                    value_ic_enabler &= ~BIT(i);      
+                    irq_num = ((32 * reg_num) + 4096) + i;
+
+                    aic_set_mask((irq_num-3076), true);
+                    vgic_log("HV vGIC DEBUG [Info] [AIC]: unmasking irq %d (maps to GIC IRQ %d)\n", (irq_num-3076), irq_num);
+                }
+            }
+            if(reg_num == 0) {
+
+            }
+            else {
+                distributor->gicd_interrupt_set_enable_regs[reg_num] = value_is_enabler;
+                distributor->gicd_interrupt_clear_enable_regs[reg_num] = value_ic_enabler;
+            }
+            register_handled = true;
+            //
+            // ICENABLER register writes require RWP dependent things to be updated, set the bit.
+            //
+            distributor->gicd_ctl_reg |= BIT(31);
+            //
+            // TODO: propagate the changes
+            //
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ISPENDR0E) && (relative_addr <= GIC_DIST_ISPENDR31E) ) {
+            //
+            // sets an IRQ to pending
+            //
+            u32 reg_num, irq_num;
+            reg_num = (relative_addr - GIC_DIST_ISPENDR0E) / 4;
+            u32 value_is_enabler, value_ic_enabler, current_val;
+            value_is_enabler = distributor->gicd_interrupt_set_pending_ext_spi_range_regs[reg_num];
+            value_ic_enabler = distributor->gicd_interrupt_clear_pending_ext_spi_range_regs[reg_num];
+            current_val = *val;
+
+            //
+            // if 1 is written to the bits in these registers, they need to read 1 in GICD_ICENABLER[1:31] as well.
+            // also this is banked for the first 8 processor cores - so changes must reflect across all of them.
+            //
+            // There has to be a way more efficient way of doing this...
+            //
+
+            for (u32 i = 0; i < 32; i++) {
+                if( ( (current_val & BIT(i)) != 0 ) && ( ( value_is_enabler & BIT(i) ) == 0) ) {
+                    value_is_enabler |= BIT(i);
+                    value_ic_enabler |= BIT(i);
+                    irq_num = ((32 * reg_num) + 4096) + i;
+                    //
+                    // TODO: do this
+                    //
+                    vgic_log("HV vGIC DEBUG [ERROR]: ISPENDR not implemented for irq %d\n", (irq_num-3076));
+                }
+            }
+            if(reg_num == 0) {
+                //
+                // don't attempt to write these registers, since affinity routing is always on.
+                //
+            }
+            else {
+                distributor->gicd_interrupt_set_pending_ext_spi_range_regs[reg_num] = value_is_enabler;
+                distributor->gicd_interrupt_clear_pending_ext_spi_range_regs[reg_num] = value_ic_enabler;
+            }
+            register_handled = true;
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ICPENDR0E) && (relative_addr <= GIC_DIST_ICPENDR31E) ) {
+            //
+            // sets an IRQ to pending
+            //
+            u32 reg_num, irq_num;
+            reg_num = (relative_addr - GIC_DIST_ICPENDR0E) / 4;
+            u32 value_is_enabler, value_ic_enabler, current_val;
+            value_is_enabler = distributor->gicd_interrupt_set_pending_ext_spi_range_regs[reg_num];
+            value_ic_enabler = distributor->gicd_interrupt_clear_pending_ext_spi_range_regs[reg_num];
+            current_val = *val;
+
+            //
+            // if 1 is written to the bits in these registers, they need to read 1 in GICD_ICENABLER[1:31] as well.
+            // also this is banked for the first 8 processor cores - so changes must reflect across all of them.
+            //
+            // There has to be a way more efficient way of doing this...
+            //
+
+            for (u32 i = 0; i < 32; i++) {
+                if( ( (current_val & BIT(i)) != 0 ) && ( ( value_is_enabler & BIT(i) ) == 0) ) {
+                    value_is_enabler &= ~BIT(i);
+                    value_ic_enabler &= ~BIT(i);
+                    irq_num = ((32 * reg_num) + 4096) + i;
+                    //
+                    // TODO: do this
+                    //
+                    vgic_log("HV vGIC DEBUG [ERROR]: ICPENDR not implemented for irq %d\n", (irq_num-3076));
+                }
+            }
+            if(reg_num == 0) {
+                //
+                // don't attempt to write these registers, since affinity routing is always on.
+                //
+            }
+            else {
+                distributor->gicd_interrupt_set_pending_ext_spi_range_regs[reg_num] = value_is_enabler;
+                distributor->gicd_interrupt_clear_pending_ext_spi_range_regs[reg_num] = value_ic_enabler;
+            }
+            register_handled = true;
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ISACTIVER0E) && (relative_addr <= GIC_DIST_ISACTIVER31E) ) {
+            //
+            // clears the pending state from an IRQ
+            //
+            u32 reg_num, irq_num;
+            reg_num = (relative_addr - GIC_DIST_ISACTIVER0E) / 4;
+            u32 value_is_enabler, value_ic_enabler, current_val;
+            value_is_enabler = distributor->gicd_interrupt_set_active_ext_spi_range_regs[reg_num];
+            value_ic_enabler = distributor->gicd_interrupt_clear_active_ext_spi_range_regs[reg_num];
+            current_val = *val;
+
+            //
+            // if 1 is written to the bits in these registers, they need to read 0 in GICD_ISACTIVER[0:31] as well.
+            // also this is banked for the first 8 processor cores - so changes must reflect across all of them.
+            //
+            // There has to be a way more efficient way of doing this...
+            //
+            for (u32 i = 0; i < 32; i++) {
+                if( ( (current_val & BIT(i)) != 0 ) && ( ( value_ic_enabler & BIT(i) ) == 0) ) {
+                    value_is_enabler |= BIT(i);
+                    value_ic_enabler |= BIT(i);
+                    irq_num = ((32 * reg_num) + 4096) + i;
+                    //
+                    // TODO: do this
+                    //
+                    vgic_log("HV vGIC DEBUG [ERROR]: ISACTIVER not implemented for irq %d\n", (irq_num-3076));
+                }  
+            }
+            if(reg_num == 0) {
+
+            }
+            else {
+                distributor->gicd_interrupt_set_active_ext_spi_range_regs[reg_num] = value_is_enabler;
+                distributor->gicd_interrupt_clear_active_ext_spi_range_regs[reg_num] = value_ic_enabler;
+            }
+            register_handled = true;
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ICACTIVER0E) && (relative_addr <= GIC_DIST_ICACTIVER31E) ) {
+            //
+            // clears the pending state from an IRQ
+            //
+            u32 reg_num, irq_num;
+            reg_num = (relative_addr - GIC_DIST_ICACTIVER0E) / 4;
+            u32 value_is_enabler, value_ic_enabler, current_val;
+            value_is_enabler = distributor->gicd_interrupt_set_active_ext_spi_range_regs[reg_num];
+            value_ic_enabler = distributor->gicd_interrupt_clear_active_ext_spi_range_regs[reg_num];
+            current_val = *val;
+
+            //
+            // if 1 is written to the bits in these registers, they need to read 0 in GICD_ISACTIVER[0:31] as well.
+            // also this is banked for the first 8 processor cores - so changes must reflect across all of them.
+            //
+            // There has to be a way more efficient way of doing this...
+            //
+            for (u32 i = 0; i < 32; i++) {
+                if( ( (current_val & BIT(i)) != 0 ) && ( ( value_ic_enabler & BIT(i) ) == 0) ) {
+                    value_is_enabler &= ~BIT(i);
+                    value_ic_enabler &= ~BIT(i);
+                    irq_num = ((32 * reg_num) + 4096) + i;
+                    //
+                    // TODO: do this
+                    //
+                    vgic_log("HV vGIC DEBUG [ERROR]: ISACTIVER not implemented for irq %d\n", (irq_num-3076));
+                }  
+            }
+            if(reg_num == 0) {
+
+            }
+            else {
+                distributor->gicd_interrupt_set_active_ext_spi_range_regs[reg_num] = value_is_enabler;
+                distributor->gicd_interrupt_clear_active_ext_spi_range_regs[reg_num] = value_ic_enabler;
+            }
+            register_handled = true;
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_IPRIORITYR0E) && (relative_addr <= GIC_DIST_IPRIORITYR255E) ) {
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_IPRIORITYR0E) / 4;
+            distributor->gicd_interrupt_priority_ext_spi_range_regs[reg_num] = *val;
+            vgic_log("HV vGIC DEBUG [INFO] [Distributor]: interrupt priority register %d = 0x%llx\n", reg_num, *val);
+            register_handled = true;
+            //unimplemented_reg_accessed = true;
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ICFGR0E) && (relative_addr <= GIC_DIST_ICFGR63E) ) {
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_ICFGR0E) / 4;
+            //
+            // Unimplemented for now (we only support the timer interrupt right now - and those are managed by the redistributors)
+            //
+            distributor->gicd_interrupt_config_regs[reg_num] = *val;
+            vgic_log("HV vGIC DEBUG [INFO] [Distributor]: interrupt configuration register %d = 0x%llx\n", reg_num, *val);
+            register_handled = true;
+            //unimplemented_reg_accessed = true;
+        }
+#endif
         else if(register_handled == false){
             //
             // the register is unknown (or unimplemented) - print a warning.
@@ -681,7 +986,10 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
                 *val = 0; // these registers are write only so force return 0 to the guest.
                 register_handled = true;
                 break;
-            case 0xffe8: // make Hal happy
+            //
+            // for some reason HAL needs this specific ID register. (the others are IMPDEF it seems)
+            //
+            case GIC_DIST_PIDR2: // make Hal happy
                 *val = 0xff;
                 register_handled = true;
                 break;
@@ -691,6 +999,14 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
                 *val = distributor->gicd_interrupt_router_regs[reg_num];
                 register_handled = true;
                 break;
+#ifdef EXTENDED_SPI_ENABLE
+            case GIC_DIST_IROUTER0E ... GIC_DIST_IROUTER1023E:
+                u32 reg_num;
+                reg_num = (relative_addr - GIC_DIST_IROUTER0E) / 8;
+                *val = distributor->gicd_interrupt_router_ext_spi_range_regs[reg_num];
+                register_handled = true;
+                break;
+#endif
             default:
                 //
                 // we're dealing with a register that is banked n times, we need to get to the if statements.
@@ -799,6 +1115,102 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
             register_handled = true;
             //unimplemented_reg_accessed = true;
         }
+#ifdef EXTENDED_SPI_ENABLE
+        if((register_handled == false) && (relative_addr >= GIC_DIST_IGROUPR0E) && (relative_addr <= GIC_DIST_IGROUPR31E) ) {
+            //
+            // the guest is trying to change the group of a given interrupt.
+            //
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_IGROUPR0E) / 4;
+
+            //
+            // TODO: bank GICD_IGROUPR0 for cores 0-7 - GIC spec requires it - but since we're booting with 1 core atm, we can ignore
+            // this for now.
+            //
+
+            *val = distributor->gicd_interrupt_group_regs_ext_spi_range[reg_num];
+            register_handled = true;
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ISENABLER0E) && (relative_addr <= GIC_DIST_ISENABLER31E) ) {
+            //
+            // enables an IRQ to be forwarded to a CPU interface.
+            //
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_ISENABLER0E) / 4;
+            *val = distributor->gicd_interrupt_set_enable_ext_spi_range_regs[reg_num];
+            register_handled = true;
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ICENABLER0E) && (relative_addr <= GIC_DIST_ICENABLER31E) ) {
+            //
+            // disables an IRQ to be forwarded to a CPU interface.
+            //
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_ICENABLER0E) / 4;
+            *val = distributor->gicd_interrupt_clear_enable_ext_spi_range_regs[reg_num];
+            register_handled = true;
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ISPENDR0E) && (relative_addr <= GIC_DIST_ISPENDR31E) ) {
+            //
+            // sets an IRQ to pending
+            //
+            u32 reg_num, irq_num;
+            reg_num = (relative_addr - GIC_DIST_ISPENDR0E) / 4;
+            distributor->gicd_interrupt_set_pending_ext_spi_range_regs[reg_num];
+            register_handled = true;
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ICPENDR0E) && (relative_addr <= GIC_DIST_ICPENDR31E) ) {
+            //
+            // clears the pending state from an IRQ
+            //
+            u32 reg_num, irq_num;
+            reg_num = (relative_addr - GIC_DIST_ICPENDR0) / 4;
+            *val = distributor->gicd_interrupt_clear_pending_ext_spi_range_regs[reg_num];
+            register_handled = true;
+
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ISACTIVER0E) && (relative_addr <= GIC_DIST_ISACTIVER31E) ) {
+            //
+            // 
+            //
+            // clears the pending state from an IRQ
+            //
+            u32 reg_num, irq_num;
+            reg_num = (relative_addr - GIC_DIST_ISACTIVER0E) / 4;
+            *val = distributor->gicd_interrupt_set_active_ext_spi_range_regs[reg_num];
+            register_handled = true;
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ICACTIVER0E) && (relative_addr <= GIC_DIST_ICACTIVER31E) ) {
+            //
+            // clears the pending state from an IRQ
+            //
+            u32 reg_num, irq_num;
+            reg_num = (relative_addr - GIC_DIST_ICACTIVER0E) / 4;
+            *val = distributor->gicd_interrupt_clear_active_ext_spi_range_regs[reg_num];
+            register_handled = true;
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_IPRIORITYR0E) && (relative_addr <= GIC_DIST_IPRIORITYR255E) ) {
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_IPRIORITYR0E) / 4;
+            *val = distributor->gicd_interrupt_priority_ext_spi_range_regs[reg_num];
+            vgic_log("HV vGIC DEBUG [INFO] [Distributor]: interrupt priority register %d = 0x%llx\n", reg_num, *val);
+            register_handled = true;
+        }
+        else if ( (register_handled == false) && (relative_addr >= GIC_DIST_ICFGR0E) && (relative_addr <= GIC_DIST_ICFGR63E) ) {
+            u32 reg_num;
+            reg_num = (relative_addr - GIC_DIST_ICFGR0E) / 4;
+            //
+            // Unimplemented for now (we only support the timer interrupt right now - and those are managed by the redistributors)
+            //
+            *val = distributor->gicd_interrupt_config_regs[reg_num];
+            vgic_log("HV vGIC DEBUG [INFO] [Distributor]: interrupt configuration register %d = 0x%llx\n", reg_num, *val);
+            register_handled = true;
+            //unimplemented_reg_accessed = true;
+        }
+#endif
         else if (register_handled == false) {
             //
             // the register is unknown (or unimplemented) - print a warning.
@@ -1461,6 +1873,28 @@ void hv_vgicv3_init_dist_registers(void)
     // For now - taking the easy route of saying that at least 1024 IRQs are supported on all platforms.
     //
     distributor->gicd_ctl_reg = (BIT(6) | BIT(4) | BIT(1) | BIT(0));
+#ifdef EXTENDED_SPI_ENABLE
+    //
+    // If extended SPI support is enabled, the GIC type will be defined as the following:
+    // - Extended SPIs supported (up to the max of INTID 5119 - unless we *wanted* to break spec and eat into the 5120-8191 reserved range...)
+    // - Affinity level 0 can go up to 15
+    // - 1 of N SPI interrupts are supported (AIC2 default behavior)
+    // - Affinity 3 invalid
+    // - 16 interrupt ID bits (to match what the CPU interface supports)
+    // - LPIs/MSIs supported (MSIs not using an ITS)
+    //
+    distributor->gicd_type_reg = (GENMASK(31, 27)
+                                 | BIT(22) 
+                                 | BIT(21) 
+                                 | BIT(20) 
+                                 | BIT(19) 
+                                 | BIT(17) 
+                                 | BIT(4) 
+                                 | BIT(3) 
+                                 | BIT(2) 
+                                 | BIT(1) 
+                                 | BIT(0));
+#else
     //
     // GIC type will be defined as the following:
     // - No extended SPIs (Update on 6/10/2025: maz in Asahi IRC says we can probably expose extended SPIs? could also look into some other hacks for > 1024 IRQ platforms)
@@ -1470,7 +1904,18 @@ void hv_vgicv3_init_dist_registers(void)
     // - 16 interrupt ID bits (to match what the CPU interface supports)
     // - LPIs/MSIs supported (MSIs not using an ITS)
     //
-    distributor->gicd_type_reg = (BIT(22) | BIT(21) | BIT(20) | BIT(19) | BIT(17) | BIT(4) | BIT(3) | BIT(2) | BIT(1) | BIT(0));
+    distributor->gicd_type_reg = (BIT(22) 
+                                 | BIT(21) 
+                                 | BIT(20) 
+                                 | BIT(19) 
+                                 | BIT(17) 
+                                 | BIT(4) 
+                                 | BIT(3) 
+                                 | BIT(2) 
+                                 | BIT(1) 
+                                 | BIT(0));
+#endif
+
     distributor->gicd_imp_id_reg = (BIT(10) | BIT(5) | BIT(4) | BIT(3) | BIT(1) | BIT(0));
     distributor->gicd_type_reg_2 = 0; 
     distributor->gicd_err_sts = 0;
@@ -1501,11 +1946,20 @@ void hv_vgicv3_assign_redist_affinity_value(u16 cpu_num, bool last_cpu) {
     //
     cpu_affinity_value |= ((mpidr_val) & 0xFF);
     gicr_typer = (((uint64_t)cpu_affinity_value) << 32);
+#ifdef EXTENDED_SPI_ENABLE
+
     //
-    // Apple silicon platforms (at least the M1 and M2 and the Pro counterparts) do not support the extended PPI/SPI ranges
+    // If we're forcing extended SPIs to be enabled, we should set bits [31:27] to 1 so we can use all of the natively
+    // supported
+#else
+    //
+    // Apple silicon platforms (at least the M1 and M2 and the Pro counterparts) do not natively support the extended PPI/SPI ranges
     // so bits 31:27 remain 0. If M3 or M4 do support the extended ranges, check the Chip ID here and toggle those bits.
     // (Unlikely, as even though M1 Ultra has > 16 cores, we do not have those ranges on that platform, which means we probably will need
     // to have a solution for those platforms.)
+    //
+#endif
+
     //
     // We're also sharing a common LPI configuration table across all the vCPUs.
     //

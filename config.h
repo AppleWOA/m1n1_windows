@@ -36,6 +36,11 @@
 //
 // #define PSCI_POWER_ON_CPUS_ENABLE
 
+//
+// Expose support for GIC extended SPIs.
+//
+#define EXTENDED_SPI_ENABLE
+
 #ifdef RELEASE
 # define FB_SILENT_MODE
 # ifdef CHAINLOADING

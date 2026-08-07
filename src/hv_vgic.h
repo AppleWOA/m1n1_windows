@@ -114,6 +114,8 @@
 #define GIC_DIST_IROUTER0E 0x8000
 #define GIC_DIST_IROUTER1023E 0x9FFC
 
+#define GIC_DIST_PIDR2 0xFFE8
+
 
 //
 // Redistributor offsets

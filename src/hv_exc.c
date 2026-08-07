@@ -923,6 +923,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
                 // this register is architecturally RO, nothing should *ever* be attempting to write this.
                 //
             }
+            return true;
 #endif
         // SYSREG_MAP(SYS_PMXEVCNTR_EL0, SYS_IMP_APL_PMC2)
         // case SYSREG_ISS(SYS_PMXEVTYPER_EL0):

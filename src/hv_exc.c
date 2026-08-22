@@ -347,7 +347,12 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         SYSREG_PASS(sys_reg(2, 0, 0, 1, 6))
         SYSREG_PASS(sys_reg(2, 0, 0, 1, 7))
 
-        SYSREG_PASS(sys_reg(2, 0, 0, 2, 2))
+        //
+        // Temporary change: MDSCR_EL1 is handled differently in upstream m1n1,
+        // hold off on just "passing" it and defer to upstream behavior for now.
+        //
+        
+        // SYSREG_PASS(sys_reg(2, 0, 0, 2, 2))
         SYSREG_PASS(sys_reg(2, 0, 0, 2, 4))
         SYSREG_PASS(sys_reg(2, 0, 0, 2, 5))
         SYSREG_PASS(sys_reg(2, 0, 0, 2, 6))

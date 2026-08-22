@@ -102,7 +102,8 @@ PMGRDevices = SafeGreedyRange(Struct(
     "unk2_0" / Int16ul,
     "pd" / Int8ul,
     "ps_cfg16" / Int8ul,
-    "unk2_1" / Int32ul,
+    "offset" / Int24ul,
+    "group" / Int8ul,
     "unk2_2" / Int32ul,
     "unk2_3" / Int16ul,
     "id2" / Int16ul,
@@ -267,6 +268,7 @@ DEV_PROPERTIES = {
             "clusters": SafeGreedyRange(Int32ul),
             "devices": PMGRDevices,
             "ps-regs": PMGRPSRegs,
+            "ps-groups": PMGRPSRegs,
             "perf-regs": PMGRPerfRegs,
             "pwrgate-regs": PMGRPWRGateRegs,
             "power-domains": PMGRPowerDomains,
@@ -297,6 +299,13 @@ DEV_PROPERTIES = {
     },
     "*pmu*": {
         "*": {
+            "info-*name*": CString("ascii"),
+            "info-*": SafeGreedyRange(Hex(Int32ul)),
+        },
+    },
+    # PMU nodes on M3 Ultra/M4 Max / macOS 15.6.1 are named "spmi-*"
+    "spmi-*": {
+        "pmu,spmi": {
             "info-*name*": CString("ascii"),
             "info-*": SafeGreedyRange(Hex(Int32ul)),
         },
@@ -438,18 +447,19 @@ def parse_prop(node, path, node_name, name, v, is_template=False):
         t = SafeGreedyRange(Struct("bus_addr" / at, "parent_addr" / pat, "size" / st))
 
     elif name.startswith("dapf-instance-"):
-        try:
-            flags = node.dart_options
-        except AttributeError:
-            return None, v
-        if flags & 0x40:
-            if len(v) % DAPFT8110B.sizeof() == 0:
-                if len(v) % DAPFT8110C.sizeof() != 0:
-                    t = GreedyRange(DAPFT8110B)
-            else:
-                t = GreedyRange(DAPFT8110C)
-        else:
+        # Using the length to identify the DAPF T8110 variant is not safe as
+        # the least common multiple of 52 and 56 is 728. While this is just
+        # used for parsing and printing this length based selection is good
+        # enough. 0x40 from "dart-options" used previously does not identify
+        # the layout.
+        if len(v) % DAPFT8110.sizeof() == 0:
             t = GreedyRange(DAPFT8110)
+        elif len(v) % DAPFT8110B.sizeof() == 0:
+            t = GreedyRange(DAPFT8110B)
+        elif len(v) % DAPFT8110C.sizeof() == 0:
+            t = GreedyRange(DAPFT8110C)
+        else:
+            return None, v
 
     elif name == "interrupts":
         # parse "interrupts" as Array of Int32ul, wrong for nodes whose
@@ -703,6 +713,8 @@ class ADTNode:
 
     @property
     def _reg_struct(self):
+        if not hasattr(self._parent, "address_cells") or not hasattr(self._parent, "size_cells"):
+            return Int32ul
         ac, sc = self._parent.address_cells, self._parent.size_cells
         return Struct(
             "addr" / Hex(Int64ul) if ac == 2 else Array(ac, Hex(Int32ul)),
@@ -810,19 +822,36 @@ class ADTNode:
         return node
 
     def pmgr_init(self):
-        self.pmgr_u8id = (self["/arm-io/pmgr"].devices[0].id1 != self["/arm-io/pmgr"].devices[1].id1)
+        self._pmgr_u8id = (self["/arm-io/pmgr"].devices[0].id1 != self["/arm-io/pmgr"].devices[1].id1)
+        self._pmgr_use_group_and_offset = not "ps-regs" in self["/arm-io/pmgr"]._properties
 
     def pmgr_dev_get_id(self, dev):
-        if self.pmgr_u8id:
+        if self._pmgr_u8id:
             return dev.id1
         else:
             return dev.id2
 
     def pmgr_dev_get_parents(self, dev):
-        if self.pmgr_u8id:
+        if self._pmgr_u8id:
             return dev.parents_un.u8id.parents 
         else:
             return dev.parents_un.u16id.parents 
+
+    def pmgr_dev_get_block(self, dev):
+        if self._pmgr_use_group_and_offset:
+            reg = self["/arm-io/pmgr"].ps_groups[dev.group].reg
+        else:
+            reg = self["/arm-io/pmgr"].ps_regs[dev.psreg].reg
+        return self["/arm-io/pmgr"].get_reg(reg)
+
+    def pmgr_dev_get_offset(self, dev):
+        if self._pmgr_use_group_and_offset:
+            return dev.offset
+        else:
+            return self["/arm-io/pmgr"].ps_regs[dev.psreg].offset + dev.psidx * 8
+
+    def pmgr_dev_get_addr(self, dev):
+        return self.pmgr_dev_get_block(dev)[0] + self.pmgr_dev_get_offset(dev)
 
 def load_adt(data):
     node = ADTNode(ADTNodeStruct.parse(data))

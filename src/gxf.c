@@ -30,7 +30,8 @@ void gxf_init(void)
     if (in_el2() && !gl1_stack[cpu])
         gl1_stack[cpu] = memalign(0x4000, GL_STACK_SIZE);
 
-    _gxf_init(gl2_stack[cpu], gl1_stack[cpu]);
+    _gxf_init(gl2_stack[cpu] + GL_STACK_SIZE,
+              gl1_stack[cpu] ? gl1_stack[cpu] + GL_STACK_SIZE : NULL);
 }
 
 bool gxf_enabled(void)

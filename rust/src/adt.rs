@@ -37,6 +37,108 @@ pub struct ADTProperty {
     value: [u8],
 }
 
+/// ADTPropertyStringIterator
+#[derive(Debug)]
+pub struct ADTPropertyStringIterator<'a> {
+    value: &'a [u8],
+}
+
+impl<'a> Iterator for ADTPropertyStringIterator<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        match CStr::from_bytes_until_nul(self.value) {
+            Ok(cs) => match cs.to_str() {
+                Ok(s) => {
+                    match self.value.iter().position(|&x| x == 0) {
+                        Some(nul) => self.value = &self.value[(nul + 1)..],
+                        None => self.value = &[],
+                    }
+                    Some(s)
+                }
+                Err(_) => {
+                    self.value = &[];
+                    None
+                }
+            },
+            Err(_) => {
+                self.value = &[];
+                None
+            }
+        }
+    }
+}
+
+/// ADTPropertiesIterator
+#[derive(Debug)]
+pub struct ADTPropertiesIterator {
+    next_property_res: Option<Result<&'static ADTProperty, AdtError>>,
+    remaining: usize,
+}
+
+impl Iterator for ADTPropertiesIterator {
+    type Item = Result<&'static ADTProperty, AdtError>;
+
+    fn next(&mut self) -> Option<Result<&'static ADTProperty, AdtError>> {
+        let Some(property_res) = self.next_property_res.take() else {
+            return None;
+        };
+        let remaining = core::mem::take(&mut self.remaining);
+        let property = match property_res {
+            Err(e) => return Some(Err(e)),
+            Ok(v) => v,
+        };
+
+        if remaining > 1 {
+            self.next_property_res = Some(property.next_property());
+            self.remaining = remaining - 1;
+        }
+
+        Some(Ok(property))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for ADTPropertiesIterator {}
+
+/// ADTPropertiesIteratorMut
+#[derive(Debug)]
+pub struct ADTPropertiesIteratorMut {
+    next_property_res: Option<Result<&'static mut ADTProperty, AdtError>>,
+    remaining: usize,
+}
+
+impl Iterator for ADTPropertiesIteratorMut {
+    type Item = Result<&'static mut ADTProperty, AdtError>;
+
+    fn next(&mut self) -> Option<Result<&'static mut ADTProperty, AdtError>> {
+        let Some(property_res) = self.next_property_res.take() else {
+            return None;
+        };
+        let remaining = core::mem::take(&mut self.remaining);
+        let property = match property_res {
+            Err(e) => return Some(Err(e)),
+            Ok(v) => v,
+        };
+
+        if remaining > 1 {
+            self.next_property_res = Some(property.next_property_mut());
+            self.remaining = remaining - 1;
+        }
+
+        Some(Ok(property))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for ADTPropertiesIteratorMut {}
+
 #[repr(C, packed(1))]
 pub struct ADTSegmentRanges {
     phys: u64,
@@ -179,7 +281,11 @@ pub fn get_reg_container(
             }
         };
 
-        let ranges = node.named_prop("ranges")?;
+        let ranges = match node.named_prop("ranges") {
+            Ok(r) => r,
+            Err(AdtError::NotFound) => break,
+            Err(e) => return Err(e),
+        };
 
         let paddr_cells = parent.named_prop("#address-cells")?.u32()?;
 
@@ -245,17 +351,22 @@ impl ADTNode {
         }
     }
 
+    /// Get a reference to the root node
+    pub fn root() -> Result<&'static ADTNode, AdtError> {
+        let ptr: *const ADTNode = unsafe { adt as *const ADTNode };
+        ADTNode::from_ptr(ptr)
+    }
+
     /// Get a reference to a node at a specified path, tracing the path to the
     /// desired node
     pub fn from_path_trace(
         path: &str,
         mut breadcrumbs: Option<&mut [Option<&'static ADTNode>]>,
     ) -> Result<&'static ADTNode, AdtError> {
-        let ptr: *const ADTNode = unsafe { adt as *const ADTNode };
         let mut p = path;
         let mut bc_idx: usize = 0;
 
-        let head = ADTNode::from_ptr(ptr)?;
+        let head = ADTNode::root()?;
         let mut n = head;
 
         while !p.is_empty() {
@@ -298,10 +409,6 @@ impl ADTNode {
             p = rest;
         }
 
-        if let Some(b) = breadcrumbs.as_mut() {
-            b[bc_idx] = Some(head)
-        }
-
         Ok(n)
     }
 
@@ -325,16 +432,28 @@ impl ADTNode {
         unsafe { ADTProperty::from_ptr_mut(self.as_ptr().add(size_of::<ADTNode>()) as usize) }
     }
 
+    pub fn properties(&self) -> ADTPropertiesIterator {
+        ADTPropertiesIterator {
+            next_property_res: Some(self.first_property()),
+            remaining: self.property_count as usize,
+        }
+    }
+
+    pub fn properties_mut(&self) -> ADTPropertiesIteratorMut {
+        ADTPropertiesIteratorMut {
+            next_property_res: Some(self.first_property_mut()),
+            remaining: self.property_count as usize,
+        }
+    }
+
     /// Walk the properties at the top of the curret node's memory to arrive at
     /// the node immediately following it. This could be a child node or a sibling.
     /// Use the relevant wrappers for additional safety.
     fn next_node(&self) -> Result<&'static ADTNode, AdtError> {
-        let mut p = self.first_property()?;
-
-        // We already have the first property
-        for _ in 0..self.property_count - 1 {
-            p = p.next_property()?;
-        }
+        let p = self.properties()
+            .last()
+            .unwrap() // There is always at least the first property, or an error
+            ?;
 
         // SAFETY: We will only ever reach this code when we can guarantee that
         // p is a reference to the very last property of the node, meaning that
@@ -363,13 +482,11 @@ impl ADTNode {
     /// Searches the node for a property with the given name, and returns it if
     /// found.
     pub fn named_prop(&self, name: &str) -> Result<&'static ADTProperty, AdtError> {
-        let mut p = self.first_property()?;
-
-        for _ in 0..self.property_count {
+        for p in self.properties() {
+            let p = p?;
             if p.name() == name {
                 return Ok(p);
             }
-            p = p.next_property()?;
         }
         Err(AdtError::NotFound)
     }
@@ -381,13 +498,11 @@ impl ADTNode {
     /// Searches the node for a property with the given name, and returns a mutable
     /// reference to it if found.
     pub fn named_prop_mut(&self, name: &str) -> Result<&'static mut ADTProperty, AdtError> {
-        let mut p = self.first_property_mut()?;
-
-        for _ in 0..self.property_count {
+        for p in self.properties_mut() {
+            let p = p?;
             if p.name() == name {
                 return Ok(p);
             }
-            p = p.next_property_mut()?;
         }
         Err(AdtError::NotFound)
     }
@@ -421,7 +536,16 @@ impl ADTNode {
     }
 
     pub fn is_compatible(&self, compatible: &str) -> Result<bool, AdtError> {
-        Ok(self.named_prop("compatible")?.str()?.contains(compatible))
+        match self.named_prop("compatible") {
+            Ok(prop) => Ok(prop.str_iter().any(|c| c == compatible)),
+            Err(AdtError::NotFound) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn compatible(&self, index: usize) -> Option<&str> {
+        let prop = self.named_prop("compatible").ok()?;
+        prop.str_iter().nth(index)
     }
 }
 
@@ -534,6 +658,12 @@ impl ADTProperty {
         }
     }
 
+    pub fn str_iter<'a>(&'a self) -> ADTPropertyStringIterator<'a> {
+        ADTPropertyStringIterator {
+            value: unsafe { core::slice::from_raw_parts(self.value.as_ptr(), self.size as usize) },
+        }
+    }
+
     pub fn set(&mut self, val: &[u8]) -> Result<usize, AdtError> {
         if val.len() != self.size as usize {
             return Err(AdtError::BadLength);
@@ -569,6 +699,14 @@ impl ADTProperty {
 
         Ok(u32::from_ne_bytes(self.value[..4].try_into().unwrap()))
     }
+
+    pub fn u64(&self) -> Result<u64, AdtError> {
+        if self.size != 8 {
+            return Err(AdtError::BadLength);
+        }
+
+        Ok(u64::from_ne_bytes(self.value[..8].try_into().unwrap()))
+    }
 }
 
 extern "C" {
@@ -600,6 +738,21 @@ pub unsafe extern "C" fn adt_first_property_offset(_dt: *const c_void, offset: c
         .as_ptr();
 
     unsafe { p.sub(adt as usize) as c_int }
+}
+
+// This function has load-bearing UB on the C side... The sound Rust equivalent
+// breaks this. Recreate the UB here rather than call the new Rust function.
+#[no_mangle]
+pub unsafe extern "C" fn adt_next_property_offset(_dt: *const c_void, offset: c_int) -> c_int {
+    let ptr: usize = unsafe { adt.add(offset as usize) as usize };
+    let p = ADTProperty::from_ptr(ptr).unwrap();
+    unsafe {
+        p.as_ptr()
+            .add(size_of::<[c_char; 32]>())
+            .add(size_of::<u32>())
+            .add((p.size as usize + (ADT_ALIGN - 1)) & !(ADT_ALIGN - 1))
+            .sub(adt as usize) as c_int
+    }
 }
 
 #[no_mangle]
@@ -770,6 +923,18 @@ pub unsafe extern "C" fn adt_is_compatible(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn adt_is_compatible_at(
+    _dt: *const c_void,
+    offset: c_int,
+    compat: *const c_char,
+    index: usize,
+) -> bool {
+    let strcompat: &str = unsafe { CStr::from_ptr(compat).to_str().unwrap() };
+    let ptr: *const ADTNode = unsafe { adt.add(offset as usize) as *const ADTNode };
+    ADTNode::from_ptr(ptr).unwrap().compatible(index).unwrap() == strcompat
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn adt_get_name(_dt: *const c_void, offset: c_int) -> *const c_char {
     let ptr: *const ADTNode = unsafe { adt.add(offset as usize) as *const ADTNode };
     ADTNode::from_ptr(ptr).unwrap().name().unwrap().as_ptr() as *const c_char
@@ -824,10 +989,13 @@ pub unsafe extern "C" fn adt_path_offset_trace(
         Ok(n) => {
             if !offsets.is_null() {
                 for (i, &r) in refs.iter().enumerate() {
-                    if r.is_some() {
-                        unsafe {
-                            *offsets.add(i) =
-                                (r.unwrap().as_ptr() as *const u8).sub(adt as usize) as i32;
+                    unsafe {
+                        let val = r
+                            .map(|r| r.as_ptr().sub(adt as usize) as i32)
+                            .unwrap_or_default();
+                        *offsets.add(i) = val;
+                        if val == 0 {
+                            break;
                         }
                     }
                 }

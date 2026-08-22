@@ -26,6 +26,8 @@ void init_t6020_blizzard(int rev);
 void init_t6020_avalanche(int rev);
 void init_t6021_blizzard(int rev);
 void init_t6021_avalanche(int rev);
+void init_t8122_sawtooth(int rev);
+void init_t8122_everest(int rev);
 void init_t6030_sawtooth(int rev);
 void init_t6030_everest(int rev);
 void init_t6031_sawtooth(int rev);
@@ -41,7 +43,7 @@ struct midr_part_info {
 const struct midr_part_features features_a7 = {
     .disable_dc_mva = true,
     .acc_cfg = true,
-    .cyc_ovrd = true,
+    .apple_sysregs_unlocked = true,
     .workaround_cyclone_cache = true,
     .sleep_mode = SLEEP_LEGACY,
 };
@@ -49,7 +51,7 @@ const struct midr_part_features features_a7 = {
 const struct midr_part_features features_a10 = {
     .disable_dc_mva = true,
     .acc_cfg = true,
-    .cyc_ovrd = true,
+    .apple_sysregs_unlocked = true,
     .workaround_cyclone_cache = false,
     .sleep_mode = SLEEP_GLOBAL,
 };
@@ -57,7 +59,7 @@ const struct midr_part_features features_a10 = {
 const struct midr_part_features features_a11 = {
     .disable_dc_mva = true,
     .acc_cfg = true,
-    .cyc_ovrd = true,
+    .apple_sysregs_unlocked = true,
     .sleep_mode = SLEEP_GLOBAL,
     .uncore_version = UNCORE_V1,
     .nex_powergating = true,
@@ -67,7 +69,7 @@ const struct midr_part_features features_a11 = {
 const struct midr_part_features features_m1 = {
     .disable_dc_mva = true,
     .acc_cfg = true,
-    .cyc_ovrd = true,
+    .apple_sysregs_unlocked = true,
     .sleep_mode = SLEEP_GLOBAL,
     .uncore_version = UNCORE_V2,
     .nex_powergating = true,
@@ -80,7 +82,7 @@ const struct midr_part_features features_m1 = {
 const struct midr_part_features features_m2 = {
     .disable_dc_mva = true,
     .acc_cfg = true,
-    .cyc_ovrd = true,
+    .apple_sysregs_unlocked = true,
     .sleep_mode = SLEEP_GLOBAL,
     .uncore_version = UNCORE_V2,
     .nex_powergating = true,
@@ -89,6 +91,21 @@ const struct midr_part_features features_m2 = {
     .siq_cfg = true,
     .amx = true,
     .actlr_el2 = true,
+};
+
+const struct midr_part_features features_m3 = {
+    .disable_dc_mva = true,
+    .acc_cfg = true,
+    .apple_sysregs_unlocked = true,
+    .sleep_mode = SLEEP_GLOBAL,
+    .uncore_version = UNCORE_V2,
+    .nex_powergating = true,
+    .fast_ipi = true,
+    .mmu_sprr = true,
+    .siq_cfg = true,
+    .amx = true,
+    .actlr_el2 = true,
+    .counter_redirect = true,
 };
 
 // XXX figure out what features are actually available on M4
@@ -128,12 +145,26 @@ const struct midr_part_info midr_parts[] = {
     {MIDR_PART_T6020_BLIZZARD, "M2 Pro Blizzard", init_t6020_blizzard, &features_m2},
     {MIDR_PART_T6021_AVALANCHE, "M2 Max Avalanche", init_t6021_avalanche, &features_m2},
     {MIDR_PART_T6021_BLIZZARD, "M2 Max Blizzard", init_t6021_blizzard, &features_m2},
-    {MIDR_PART_T6030_EVEREST, "M3 Pro Everest", init_t6030_everest, &features_m2},
-    {MIDR_PART_T6030_SAWTOOTH, "M3 Pro Sawtooth", init_t6030_sawtooth, &features_m2},
-    {MIDR_PART_T6031_EVEREST, "M3 Max Everest", init_t6031_everest, &features_m2},
-    {MIDR_PART_T6031_SAWTOOTH, "M3 Max Sawtooth", init_t6031_sawtooth, &features_m2},
+    {MIDR_PART_T6030_EVEREST, "M3 Pro Everest", init_t6030_everest, &features_m3},
+    {MIDR_PART_T6030_SAWTOOTH, "M3 Pro Sawtooth", init_t6030_sawtooth, &features_m3},
+    {MIDR_PART_T6031_EVEREST, "M3 Max Everest", init_t6031_everest, &features_m3},
+    {MIDR_PART_T6031_SAWTOOTH, "M3 Max Sawtooth", init_t6031_sawtooth, &features_m3},
+    {MIDR_PART_T8122_EVEREST, "M3 Everest", init_t8122_everest, &features_m3},
+    {MIDR_PART_T8122_SAWTOOTH, "M3 Sawtooth", init_t8122_sawtooth, &features_m3},
     {MIDR_PART_T8132_DONAN_ECORE, "M4 Donan (E core)", NULL, &features_m4},
     {MIDR_PART_T8132_DONAN_PCORE, "M4 Donan (P core)", NULL, &features_m4},
+    {MIDR_PART_T6040_BRAVA_CHOP_ECORE, "M4 Pro Brava Chop (E core)", NULL, &features_m4},
+    {MIDR_PART_T6040_BRAVA_CHOP_PCORE, "M4 Pro Brava Chop (P core)", NULL, &features_m4},
+    {MIDR_PART_T6041_BRAVA_ECORE, "M4 Max Brava (E core)", NULL, &features_m4},
+    {MIDR_PART_T6041_BRAVA_PCORE, "M4 Max Brava (P core)", NULL, &features_m4},
+    {MIDR_PART_T8140_TAHITI_ECORE, "A18 Pro Tahiti (E core)", NULL, &features_m4},
+    {MIDR_PART_T8140_TAHITI_PCORE, "A18 Pro Tahiti (P core)", NULL, &features_m4},
+    {MIDR_PART_T8142_HIDRA_ECORE, "M5 Hidra (E core)", NULL, &features_m4},
+    {MIDR_PART_T8142_HIDRA_PCORE, "M5 Hidra (P core)", NULL, &features_m4},
+    {MIDR_PART_T6050_SOTRA_MCORE, "M5 Pro Sotra (M core)", NULL, &features_m4},
+    {MIDR_PART_T6050_SOTRA_PCORE, "M5 Pro Sotra (P core)", NULL, &features_m4},
+    {MIDR_PART_T6051_SOTRAC_MCORE, "M5 Max Sotra C (M core)", NULL, &features_m4},
+    {MIDR_PART_T6051_SOTRAC_PCORE, "M5 Max Sotra C (P core)", NULL, &features_m4},
 };
 
 const struct midr_part_features features_unknown = {
@@ -211,15 +242,23 @@ void init_cpu(void)
         reg_clr(SYS_IMP_APL_ACC_CFG, ACC_CFG_DEEP_SLEEP);
     }
 
-    if (cpu_features->cyc_ovrd) {
-        /* Unmask external IRQs, set WFI mode to up (2) */
+    if (cpu_features->apple_sysregs_unlocked) {
+        /* Unmask external IRQs, set WFI mode to up (2), enable WFI retention */
         reg_mask(SYS_IMP_APL_CYC_OVRD,
-                 CYC_OVRD_FIQ_MODE_MASK | CYC_OVRD_IRQ_MODE_MASK | CYC_OVRD_WFI_MODE_MASK,
+                 CYC_OVRD_FIQ_MODE_MASK | CYC_OVRD_IRQ_MODE_MASK | CYC_OVRD_WFI_MODE_MASK |
+                     CYC_OVRD_DISABLE_WFI_RET,
                  CYC_OVRD_FIQ_MODE(0) | CYC_OVRD_IRQ_MODE(0) | CYC_OVRD_WFI_MODE(2));
     }
 
     // Enable branch prediction state retention across ACC sleep
     if (cpu_features->acc_cfg) {
         reg_mask(SYS_IMP_APL_ACC_CFG, ACC_CFG_BP_SLEEP_MASK, ACC_CFG_BP_SLEEP(3));
+    }
+
+    // Set up counter redirect for scaled 1 GHz counter frequency (ARMv8.6-a requirement)
+    if (cpu_features->counter_redirect) {
+        msr(SYS_IMP_APL_AGTCNTRDIR_EL1, 0);
+        if (in_el2())
+            msr(SYS_IMP_APL_AGTCNTRDIR_EL12, 0);
     }
 }

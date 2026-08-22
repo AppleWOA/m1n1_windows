@@ -49,6 +49,8 @@ struct hv_secondary_info_t {
     uint64_t cnthctl;
     uint64_t sprr_config;
     uint64_t gxf_config;
+    uint64_t agt_cnt_rdir_el1;
+    uint64_t agt_cnt_rdir_el12;
 };
 
 static struct hv_secondary_info_t hv_secondary_info;
@@ -140,7 +142,7 @@ void hv_init(void)
     }
 
     // Set deep WFI back to defaults
-    if (cpu_features->cyc_ovrd)
+    if (cpu_features->apple_sysregs_unlocked)
         reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK, CYC_OVRD_WFI_MODE(0));
 
     sysop("dsb ishst");
@@ -189,6 +191,10 @@ void hv_start(void *entry, u64 regs[4])
     hv_secondary_info.cnthctl = mrs(CNTHCTL_EL2);
     hv_secondary_info.sprr_config = mrs(SYS_IMP_APL_SPRR_CONFIG_EL1);
     hv_secondary_info.gxf_config = mrs(SYS_IMP_APL_GXF_CONFIG_EL1);
+    if (cpu_features->counter_redirect) {
+        hv_secondary_info.agt_cnt_rdir_el1 = mrs(SYS_IMP_APL_AGTCNTRDIR_EL1);
+        hv_secondary_info.agt_cnt_rdir_el12 = mrs(SYS_IMP_APL_AGTCNTRDIR_EL12);
+    }
 
 #ifdef ENABLE_VGIC_MODULE
     hv_vgicv3_enable_virtual_interrupts();
@@ -245,7 +251,8 @@ void hv_start(void *entry, u64 regs[4])
 
 static void hv_init_secondary(struct hv_secondary_info_t *info)
 {
-    gxf_init();
+    if (cpu_features->apple_sysregs_unlocked)
+        gxf_init();
 
     msr(VBAR_EL1, _hv_vectors_start);
 
@@ -255,26 +262,39 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
     msr(VTTBR_EL2, info->vttbr);
     msr(MDCR_EL2, info->mdcr);
     msr(MDSCR_EL1, info->mdscr);
-    msr(SYS_IMP_APL_AMX_CTL_EL2, info->amx_ctl);
-    msr(SYS_IMP_APL_APVMKEYLO_EL2, info->apvmkeylo);
-    msr(SYS_IMP_APL_APVMKEYHI_EL2, info->apvmkeyhi);
-    msr(SYS_IMP_APL_APSTS_EL12, info->apsts);
+
+    if (cpu_features->apple_sysregs_unlocked) {
+        msr(SYS_IMP_APL_AMX_CTL_EL2, info->amx_ctl);
+        msr(SYS_IMP_APL_APVMKEYLO_EL2, info->apvmkeylo);
+        msr(SYS_IMP_APL_APVMKEYHI_EL2, info->apvmkeyhi);
+        msr(SYS_IMP_APL_APSTS_EL12, info->apsts);
+    }
     msr(ACTLR_EL2, info->actlr_el2);
     if (cpu_features->actlr_el2)
         msr(SYS_ACTLR_EL12, info->actlr_el1);
     else
         msr(SYS_IMP_APL_ACTLR_EL12, info->actlr_el1);
-    msr(CNTHCTL_EL2, info->cnthctl);
-    msr(SYS_IMP_APL_SPRR_CONFIG_EL1, info->sprr_config);
-    msr(SYS_IMP_APL_GXF_CONFIG_EL1, info->gxf_config);
+    if (cpu_features->apple_sysregs_unlocked) {
+        msr(SYS_IMP_APL_SPRR_CONFIG_EL1, info->sprr_config);
+        /* GXF_CONFIG is UNDEF unless SPRR is enabled */
+        if (info->sprr_config & SPRR_CONFIG_EN)
+            msr(SYS_IMP_APL_GXF_CONFIG_EL1, info->gxf_config);
+    }
+    if (cpu_features->counter_redirect) {
+        msr(SYS_IMP_APL_AGTCNTRDIR_EL1, info->agt_cnt_rdir_el1);
+        msr(SYS_IMP_APL_AGTCNTRDIR_EL12, info->agt_cnt_rdir_el12);
+    }
 
 #ifdef ENABLE_VGIC_MODULE
     hv_vgicv3_enable_virtual_interrupts();
     hv_vgicv3_init_list_registers();
 #endif
-
-    if (cpu_features->cyc_ovrd)
+    if (cpu_features->apple_sysregs_unlocked)
         reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK, CYC_OVRD_WFI_MODE(0));
+
+    // For M3 and up, CNTHCTL_EL2 must be written after the counter redirection
+    sysop("isb");
+    msr(CNTHCTL_EL2, info->cnthctl);
 
     if (gxf_enabled())
         gl2_call(hv_set_gxf_vbar, 0, 0, 0, 0);
@@ -309,7 +329,7 @@ void hv_start_secondary(int cpu, void *entry, u64 regs[4])
 
     printf("HV: Entering guest secondary %d at %p\n", cpu, entry);
     hv_started_cpus[cpu] = true;
-    __atomic_or_fetch(&hv_cpus_in_guest, BIT(smp_id()), __ATOMIC_ACQUIRE);
+    __atomic_or_fetch(&hv_cpus_in_guest, BIT(cpu), __ATOMIC_ACQUIRE);
 
     iodev_console_flush();
     smp_call4(cpu, hv_enter_secondary, (u64)entry, (u64)regs, 0, 0);

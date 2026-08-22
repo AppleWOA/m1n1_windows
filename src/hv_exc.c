@@ -22,12 +22,6 @@
 extern bool vgic_inited;
 extern spinlock_t bhl;
 
-#define _SYSREG_ISS(_1, _2, op0, op1, CRn, CRm, op2)                                               \
-    (((op0) << ESR_ISS_MSR_OP0_SHIFT) | ((op1) << ESR_ISS_MSR_OP1_SHIFT) |                         \
-     ((CRn) << ESR_ISS_MSR_CRn_SHIFT) | ((CRm) << ESR_ISS_MSR_CRm_SHIFT) |                         \
-     ((op2) << ESR_ISS_MSR_OP2_SHIFT))
-#define SYSREG_ISS(...) _SYSREG_ISS(__VA_ARGS__)
-
 #define PERCPU(x) pcpu[mrs(TPIDR_EL2)].x
 #define PERCPU_N(x, y) pcpu[x].y
 
@@ -37,6 +31,7 @@ struct hv_pcpu_data {
     u32 pmc_pending;
     u64 pmc_irq_mode;
     u64 exc_entry_pmcr0_cnt;
+    u64 mdscr;
 #ifdef ENABLE_VGIC_MODULE
     virq_queue_t irq_queue;
     virq_queue_t sgi_queue;
@@ -945,7 +940,13 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         SYSREG_PASS(sys_reg(1, 0, 8, 1, 0)) // TLBI VMALLE1OS
         SYSREG_PASS(sys_reg(1, 0, 8, 1, 1)) // TLBI VAE1OS
         SYSREG_PASS(sys_reg(1, 0, 8, 1, 2)) // TLBI ASIDE1OS
+        SYSREG_PASS(sys_reg(1, 0, 8, 1, 3)) // TLBI VAAE1OS
+        SYSREG_PASS(sys_reg(1, 0, 8, 1, 5)) // TLBI VALE1OS
+        SYSREG_PASS(sys_reg(1, 0, 8, 1, 7)) // TLBI VAALE1OS
         SYSREG_PASS(sys_reg(1, 0, 8, 5, 1)) // TLBI RVAE1OS
+        SYSREG_PASS(sys_reg(1, 0, 8, 5, 3)) // TLBI RVAAE1OS
+        SYSREG_PASS(sys_reg(1, 0, 8, 5, 5)) // TLBI RVALE1OS
+        SYSREG_PASS(sys_reg(1, 0, 8, 5, 7)) // TLBI RVAALE1OS
 
         case SYSREG_ISS(SYS_ACTLR_EL1):
             if (is_read) {
@@ -966,6 +967,14 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
                 regs[rt] = PERCPU(ipi_pending) ? IPI_SR_PENDING : 0;
             else if (regs[rt] & IPI_SR_PENDING)
                 PERCPU(ipi_pending) = false;
+            return true;
+
+        /* the hypervisor needs this one for breakpoints and single-stepping */
+        case SYSREG_ISS(SYS_MDSCR_EL1):
+            if (is_read)
+                regs[rt] = PERCPU(mdscr);
+            else
+                PERCPU(mdscr) = regs[rt];
             return true;
 
         /* shadow the interrupt mode and state flag */

@@ -48,11 +48,12 @@
 #define SYS_CNTP_CTL_EL02  sys_reg(3, 5, 14, 2, 1)
 #define SYS_CNTP_CVAL_EL02 sys_reg(3, 5, 14, 2, 2)
 
-#define SYS_ESR_EL2 sys_reg(3, 4, 5, 2, 0)
-#define ESR_ISS2    GENMASK(36, 32)
-#define ESR_EC      GENMASK(31, 26)
-#define ESR_IL      BIT(25)
-#define ESR_ISS     GENMASK(24, 0)
+#define SYS_ESR_EL2  sys_reg(3, 4, 5, 2, 0)
+#define ESR_ISS2     GENMASK(36, 32)
+#define ESR_EC       GENMASK(31, 26)
+#define ESR_EC_SHIFT 26
+#define ESR_IL       BIT(25)
+#define ESR_ISS      GENMASK(24, 0)
 
 #define ESR_EC_UNKNOWN      0b000000
 #define ESR_EC_WFI          0b000001
@@ -116,6 +117,12 @@
 #define ESR_ISS_MSR_CRm       GENMASK(4, 1)
 #define ESR_ISS_MSR_CRm_SHIFT 1
 #define ESR_ISS_MSR_DIR       BIT(0)
+
+#define _SYSREG_ISS(_1, _2, op0, op1, CRn, CRm, op2)                                               \
+    (((op0) << ESR_ISS_MSR_OP0_SHIFT) | ((op1) << ESR_ISS_MSR_OP1_SHIFT) |                         \
+     ((CRn) << ESR_ISS_MSR_CRn_SHIFT) | ((CRm) << ESR_ISS_MSR_CRm_SHIFT) |                         \
+     ((op2) << ESR_ISS_MSR_OP2_SHIFT))
+#define SYSREG_ISS(...) _SYSREG_ISS(__VA_ARGS__)
 
 #define SYS_HCR_EL2  sys_reg(3, 4, 1, 1, 0)
 #define HCR_TWEDEL   GENMASK(63, 60)
@@ -269,6 +276,31 @@
 #define SYS_SPSR_EL1  sys_reg(3, 0, 4, 0, 0)
 #define SYS_SPSR_EL12 sys_reg(3, 5, 4, 0, 0)
 #define SYS_SPSR_EL2  sys_reg(3, 4, 4, 0, 0)
+
+#define SYS_ELR_EL12   sys_reg(3, 5, 4, 0, 1)
+#define SYS_ESR_EL12   sys_reg(3, 5, 5, 2, 0)
+#define SYS_FAR_EL12   sys_reg(3, 5, 6, 0, 0)
+#define SYS_VBAR_EL12  sys_reg(3, 5, 12, 0, 0)
+#define SYS_AFSR1_EL12 sys_reg(3, 5, 5, 1, 1)
+
+#define SYS_TTBR0_EL12 sys_reg(3, 5, 2, 0, 0)
+#define SYS_TTBR1_EL12 sys_reg(3, 5, 2, 0, 1)
+#define SYS_TCR_EL12   sys_reg(3, 5, 2, 0, 2)
+#define SYS_MAIR_EL12  sys_reg(3, 5, 10, 2, 0)
+
+#define SYS_TTBR0_EL1      sys_reg(3, 0, 2, 0, 0)
+#define SYS_TTBR1_EL1      sys_reg(3, 0, 2, 0, 1)
+#define SYS_ESR_EL1        sys_reg(3, 0, 5, 2, 0)
+#define SYS_FAR_EL1        sys_reg(3, 0, 6, 0, 0)
+#define SYS_AFSR0_EL1      sys_reg(3, 0, 5, 1, 0)
+#define SYS_AFSR1_EL1      sys_reg(3, 0, 5, 1, 1)
+#define SYS_MAIR_EL1       sys_reg(3, 0, 10, 2, 0)
+#define SYS_AMAIR_EL1      sys_reg(3, 0, 10, 3, 0)
+#define SYS_CONTEXTIDR_EL1 sys_reg(3, 0, 13, 0, 1)
+
+#define SYS_AFSR0_EL12      sys_reg(3, 5, 5, 1, 0)
+#define SYS_AMAIR_EL12      sys_reg(3, 5, 10, 3, 0)
+#define SYS_CONTEXTIDR_EL12 sys_reg(3, 5, 13, 0, 1)
 // exception taken from AArch64
 #define SPSR_N     BIT(31)
 #define SPSR_Z     BIT(30)
@@ -287,6 +319,25 @@
 #define SPSR_I     BIT(7)
 #define SPSR_F     BIT(6)
 #define SPSR_M     GENMASK(4, 0)
+#define SPSR_M_ES  BIT(4)
+#define SPSR_M_EL  GENMASK(3, 0)
+
+#define SPSR_M_EL0  0b0000UL
+#define SPSR_M_EL1T 0b0100UL
+#define SPSR_M_EL1H 0b0101UL
+// only for SPSR_EL1
+#define SPSR_M_EL1T_NV 0b1000UL
+#define SPSR_M_EL1H_NV 0b1001UL
+// only for SPSR_EL2 and SPSR_EL3
+#define SPSR_M_EL2T 0b1000UL
+#define SPSR_M_EL2H 0b1001UL
+// only for SPSR_EL3
+#define SPSR_M_EL3T 0b1100UL
+#define SPSR_M_EL3H 0b1101UL
+
+#define TTBR_ASID  GENMASK(63, 48)
+#define TTBR_BADDR GENMASK(47, 1)
+#define TTBR_CNP   BIT(0)
 
 #define SYS_TCR_EL1    sys_reg(3, 0, 2, 0, 2)
 #define TCR_DS         BIT(59)
@@ -364,6 +415,8 @@
 #define VTCR_SL0   GENMASK(7, 6)
 #define VTCR_SL0   GENMASK(7, 6)
 #define VTCR_T0SZ  GENMASK(5, 0)
+
+#define SYS_MDSCR_EL1 sys_reg(2, 0, 0, 2, 2)
 
 #define SYS_PMCR_EL0 sys_reg(3, 3, 9, 12, 0)
 #define PMCR_RESERVED GENMASK(63, 33)

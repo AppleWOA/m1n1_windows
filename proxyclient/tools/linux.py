@@ -14,14 +14,20 @@ parser.add_argument('--compression', choices=['auto', 'none', 'gz', 'xz'], defau
 parser.add_argument('-b', '--bootargs', type=str, metavar='"boot arguments"')
 parser.add_argument('-t', '--tty', type=str)
 parser.add_argument('-u', '--u-boot', type=pathlib.Path, help="load u-boot before linux")
+parser.add_argument('-E', '--efi', action="store_true", help="payload is EFI stub (requires u-boot)")
 parser.add_argument('-T', '--tso', action="store_true", help="enable TSO")
 args = parser.parse_args()
 
 from m1n1.setup import *
 
+if args.efi and args.u_boot is None:
+        raise Exception("Booting EFI stubs requires u-boot.")
+
 if args.compression == 'auto':
     suffix = args.payload.suffix
-    if suffix == '.gz':
+    if args.efi:
+        args.compression = 'none'
+    elif suffix == '.gz':
         args.compression = 'gz'
     elif suffix == '.xz':
         args.compression = 'xz'
@@ -81,35 +87,27 @@ if args.u_boot:
     uboot_addr = u.memalign(2*1024*1024, len(uboot))
     print("Loading u-boot to 0x%x..." % uboot_addr)
 
-    bootenv_start = uboot.find(b"bootcmd=run distro_bootcmd")
-    bootenv_len = uboot[bootenv_start:].find(b"\x00\x00")
-    bootenv_old = uboot[bootenv_start:bootenv_start+bootenv_len]
-    bootenv = str(bootenv_old, "ascii").split("\x00")
-    bootenv = list(filter(lambda x: not (x.startswith("baudrate") or x.startswith("boot_") or x.startswith("distro_bootcmd")), bootenv))
-
-    if initramfs is not None:
-        bootcmd = "distro_bootcmd=booti 0x%x 0x%x:0x%x $fdtcontroladdr" % (kernel_base, initramfs_base, initramfs_size)
-    else:
-        bootcmd = "distro_bootcmd=booti 0x%x - $fdtcontroladdr" % (kernel_base)
-
-    if tty_dev is not None:
-        bootenv.append("baudrate=%d" % tty_dev.baudrate)
-    bootenv.append(bootcmd)
-    if args.bootargs is not None:
-        bootenv.append("bootargs=" + args.bootargs)
-
-    bootenv_new = b"\x00".join(map(lambda x: bytes(x, "ascii"), bootenv))
-    bootenv_new = bootenv_new.ljust(len(bootenv_old), b"\x00")
-
-    if len(bootenv_new) > len(bootenv_old):
-        raise Exception("New bootenv cannot be larger than original bootenv")
-    uboot[bootenv_start:bootenv_start+bootenv_len] = bootenv_new
-
     u.compressed_writemem(uboot_addr, uboot, True)
     p.dc_cvau(uboot_addr, uboot_size)
     p.ic_ivau(uboot_addr, uboot_size)
 
     boot_addr = uboot_addr
+
+    if args.efi and initramfs is not None:
+        bootcmd = "bootefi 0x%x:0x%x 0x%x:0x%x $fdtcontroladdr" % (kernel_base, kernel_size, initramfs_base, initramfs_size)
+    elif initramfs is not None:
+        bootcmd = "booti 0x%x 0x%x:0x%x $fdtcontroladdr" % (kernel_base, initramfs_base, initramfs_size)
+    elif args.efi:
+        bootcmd = "bootefi 0x%x:0x%x $fdtcontroladdr" % (kernel_base, kernel_size)
+    else:
+        bootcmd = "booti 0x%x - $fdtcontroladdr" % (kernel_base)
+
+    p.kboot_set_uboot("bootcmd", bootcmd)
+    p.kboot_set_uboot("bootdelay", "0")
+
+    if tty_dev is not None:
+        p.kboot_set_uboot("baudrate", "%d" % tty_dev.baudrate)
+
 
 p.cpufreq_init()
 p.smp_start_secondaries()

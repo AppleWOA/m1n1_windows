@@ -36,6 +36,9 @@
 //
 // #define PSCI_POWER_ON_CPUS_ENABLE
 
+// Switch the DFU USB-C port to debugusb
+// #define USE_DEBUG_USB
+
 #ifdef RELEASE
 # define FB_SILENT_MODE
 # ifdef CHAINLOADING

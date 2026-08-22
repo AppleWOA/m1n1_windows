@@ -8,11 +8,3 @@ __pycache__
 *.rej
 /rust/target
 .idea
-/m1n1\.spec
-/m1n1-rust-deps\.patch
-/rust-fatfs-fix-build-log\.patch
-/m1n1-*\.src\.rpm
-/m1n1-*\.tar\.gz
-/rust-fatfs-*\.tar\.gz
-.vscode/
-null.d

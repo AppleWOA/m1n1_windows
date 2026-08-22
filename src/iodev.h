@@ -8,8 +8,10 @@
 
 #define USB_IODEV_COUNT 8
 
+// enum must be kept in sync with IODEV in proxyclient/m1n1/proxy.py
 typedef enum _iodev_id_t {
     IODEV_UART,
+    IODEV_DOCKCHANNEL_UART,
     IODEV_FB,
     IODEV_USB_VUART,
     IODEV_USB0,

@@ -31,6 +31,7 @@
 #include "libfdt/libfdt.h"
 
 #define MAX_CHOSEN_PARAMS 16
+#define MAX_UBOOT_CONFIGS 4
 
 #define MAX_ATC_DEVS 8
 #define MAX_CIO_DEVS 8
@@ -44,6 +45,7 @@ static int dt_bufsize = 0;
 static void *initrd_start = NULL;
 static size_t initrd_size = 0;
 static char *chosen_params[MAX_CHOSEN_PARAMS][2];
+static char *uboot_config[MAX_UBOOT_CONFIGS][2];
 
 extern const char *const m1n1_version;
 
@@ -327,6 +329,34 @@ static int dt_set_chosen(void)
     return 0;
 }
 
+static int dt_set_uboot_config(void)
+{
+    // return without modifying dt if no params are set
+    if (!uboot_config[0][0])
+        return 0;
+
+    int root = fdt_path_offset(dt, "/");
+    if (root < 0)
+        bail("FDT: root node not found in devtree\n");
+
+    int node = fdt_add_subnode(dt, root, "config");
+    if (node < 0)
+        bail("FDT: could not add /config node\n");
+
+    for (int i = 0; i < MAX_UBOOT_CONFIGS; i++) {
+        if (!uboot_config[i][0])
+            break;
+
+        const char *name = uboot_config[i][0];
+        const char *value = uboot_config[i][1];
+        if (fdt_setprop(dt, node, name, value, strlen(value) + 1) < 0)
+            bail("FDT: couldn't set config.%s property\n", name);
+        printf("FDT: /config/%s = '%s'\n", name, value);
+    }
+
+    return 0;
+}
+
 static int dt_set_memory(void)
 {
     int anode = adt_path_offset(adt, "/chosen");
@@ -595,7 +625,7 @@ static int dt_set_cpus(void)
     if (aic == -FDT_ERR_NOTFOUND)
         aic = fdt_node_offset_by_compatible(dt, -1, "apple,aic2");
     if (aic == -FDT_ERR_NOTFOUND)
-        aic = fdt_node_offset_by_compatible(dt, -1, "apple,aic3");
+        aic = fdt_node_offset_by_compatible(dt, -1, "apple,t8122-aic3");
     if (aic < 0)
         bail_cleanup("FDT: Failed to find AIC node\n");
 
@@ -1165,8 +1195,23 @@ static int dt_append_acio_tunable(int adt_node, int fdt_node,
     return 0;
 }
 
-static int dt_copy_usb4_drom(const char *adt_path, const char *dt_alias)
+static u8 crc8(u8 *b, size_t len)
 {
+    u8 value = 0xff;
+
+    for (unsigned i = 0; i < len; i++) {
+        value /*= value*/ ^= b[i];
+        for (unsigned j = 0; j < 8; j++)
+            value = (value << 1) ^ ((value & 0x80) ? 7 : 0);
+    }
+
+    return value;
+}
+
+static int dt_copy_usb4_drom(const char *adt_path, const char *dt_alias, u64 router_uuid)
+{
+    u8 drom[256];
+
     int adt_node = adt_path_offset(adt, adt_path);
     if (adt_node < 0)
         return -1;
@@ -1184,7 +1229,15 @@ static int dt_copy_usb4_drom(const char *adt_path, const char *dt_alias)
     if (!drom_blob || !drom_len)
         bail("ADT: Failed to get thunderbolt-drom\n");
 
-    return fdt_setprop(dt, fdt_node, "apple,thunderbolt-drom", drom_blob, drom_len);
+    if (drom_len > sizeof(drom))
+        bail("ADT: thunderbolt-drom exceed buffer size (%u > %zu)\n", drom_len, sizeof(drom));
+
+    memcpy(drom, drom_blob, drom_len);
+    memcpy(&drom[1], &router_uuid, sizeof(router_uuid));
+
+    drom[0] = crc8(&drom[1], 8);
+
+    return fdt_setprop(dt, fdt_node, "apple,thunderbolt-drom", drom, drom_len);
 }
 
 static int dt_copy_acio_tunables(const char *adt_path, const char *dt_alias,
@@ -1222,6 +1275,10 @@ static int dt_set_acio_tunables(void)
 {
     char adt_path[32];
     char fdt_alias[32];
+    u64 router_uuid = rust_usb4_router_uuid();
+
+    if (!router_uuid)
+        bail("ADT: unable to generate USB4 router UUID\n");
 
     for (int i = 0; i < MAX_CIO_DEVS; ++i) {
         memset(adt_path, 0, sizeof(adt_path));
@@ -1242,7 +1299,7 @@ static int dt_set_acio_tunables(void)
         snprintf(fdt_alias, sizeof(fdt_alias), "usb4_%d_nhi", i);
         dt_copy_acio_tunables(adt_path, fdt_alias, usb4_nhi_tunables,
                               sizeof(usb4_nhi_tunables) / sizeof(*usb4_nhi_tunables));
-        dt_copy_usb4_drom(adt_path, fdt_alias);
+        dt_copy_usb4_drom(adt_path, fdt_alias, router_uuid | i);
     }
 
     return 0;
@@ -1493,7 +1550,7 @@ static int dt_set_dcp_firmware(const char *alias)
             break;
         case V13_5B4:
         case V13_5:
-        case V13_6_2:
+        case V13_6_1:
             compat = &fw_versions[V13_5];
             break;
         default:
@@ -1994,6 +2051,63 @@ static int dt_set_display(void)
         return dt_vram_reserved_region("dcp", "disp0");
 }
 
+static const char *excluded_pmp_props[] = {
+    "compatible",    "AAPL,phandle",    "region-base", "region-size",
+    "segment-names", "segment-ranges",  "pre-loaded",  "firmware-name",
+    "dram-capacity", "coredump-enable", "name",        NULL,
+};
+
+static bool skip_pmp_prop(const char *prop_name)
+{
+    for (int i = 0; excluded_pmp_props[i]; i++)
+        if (!strcmp(prop_name, excluded_pmp_props[i]))
+            return true;
+    return false;
+}
+
+static int dt_set_pmp(void)
+{
+    int pmp_node = fdt_path_offset(dt, "pmp");
+    if (pmp_node < 0) {
+        printf("FDT: pmp not found in devtree\n");
+        return 0;
+    }
+    int chosen_anode = adt_path_offset(adt, "/chosen");
+    if (chosen_anode < 0)
+        bail("ADT: /chosen not found \n");
+    int pmp_iop_anode = adt_path_offset(adt, "/arm-io/pmp/iop-pmp-nub");
+    if (pmp_iop_anode < 0)
+        bail("ADT: /arm-io/pmp/iop-pmp-nub not found \n");
+
+    u32 board_id, dram_vendor_id, dram_capacity = 0xFFFFFFFF;
+    if (ADT_GETPROP(adt, chosen_anode, "board-id", &board_id) < 0)
+        bail("ADT: failed to get board id\n");
+    if (ADT_GETPROP(adt, chosen_anode, "dram-vendor-id", &dram_vendor_id) < 0)
+        bail("ADT: failed to get dram vendor id\n");
+    ADT_GETPROP(adt, pmp_iop_anode, "dram-capacity", &dram_capacity);
+
+    if (fdt_setprop_u32(dt, pmp_node, "apple,board-id", board_id))
+        bail("FDT: failed to set board id\n");
+    if (fdt_setprop_u32(dt, pmp_node, "apple,dram-vendor-id", dram_vendor_id))
+        bail("FDT: failed to set dram vendor id\n");
+    if (dram_capacity != 0xFFFFFFFF &&
+        fdt_setprop_u32(dt, pmp_node, "apple,dram-capacity", dram_capacity))
+        bail("FDT: failed to set dram capacity\n");
+
+    ADT_FOREACH_PROPERTY(adt, pmp_iop_anode, prop)
+    {
+        if (skip_pmp_prop(prop->name))
+            continue;
+        char prop_name[128];
+        snprintf(prop_name, sizeof(prop_name), "apple,tunable-%s", prop->name);
+        if (fdt_setprop(dt, pmp_node, prop_name, prop->value, prop->size))
+            bail("FDT: failed to transfer pmp tunable");
+    }
+    pmp_node = fdt_path_offset(dt, "pmp");
+    fdt_setprop_string(dt, pmp_node, "status", "okay");
+    return 0;
+}
+
 static int dt_set_sep(void)
 {
     const char *path = fdt_get_alias(dt, "sep");
@@ -2161,7 +2275,7 @@ static int dt_set_isp_fwdata(void)
     const struct fw_version_info *compat;
 
     switch (os_firmware.version) {
-        case V13_6_2:
+        case V13_6_1:
             compat = &fw_versions[V13_5];
             break;
         default:
@@ -2210,7 +2324,8 @@ static int dt_set_isp_fwdata(void)
     return 0;
 }
 
-static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix, int max_devs)
+static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix, int max_devs,
+                                   int regnum)
 {
     int ret = -1;
     int adt_prefix_len = strlen(adt_prefix);
@@ -2248,8 +2363,11 @@ static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix
         if (strncmp(name, adt_prefix, adt_prefix_len))
             continue;
 
+        if (name[adt_prefix_len] < '0' || name[adt_prefix_len] > '9')
+            continue;
+
         path[pp] = node;
-        if (adt_get_reg(adt, path, "reg", 0, &addrs[acnt++], NULL) < 0)
+        if (adt_get_reg(adt, path, "reg", regnum, &addrs[acnt++], NULL) < 0)
             bail_cleanup("Error getting /arm-io/%s regs\n", name);
     }
 
@@ -2318,24 +2436,23 @@ static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix
                 }
             }
 
-            int port = fdt_subnode_offset(dt, node, "port");
-            if (port >= 0) {
-                int endpoint = fdt_subnode_offset(dt, port, "endpoint");
-                if (endpoint >= 0) {
-                    const fdt32_t *remote_endpoint =
-                        fdt_getprop(dt, endpoint, "remote-endpoint", NULL);
-                    if (remote_endpoint) {
-                        phandles[phcnt++] = fdt32_ld(remote_endpoint);
-                    }
-                }
-            }
-
             const char *status = fdt_getprop(dt, node, "status", NULL);
             if (!status || strcmp(status, "disabled")) {
                 printf("FDT: Disabling missing device %s/%s\n", path, name);
 
                 if (fdt_setprop_string(dt, node, "status", "disabled") < 0)
                     bail_cleanup("FDT: failed to set status property of %s/%s\n", path, name);
+            }
+
+            // disable child devices
+            int child;
+            fdt_for_each_subnode(child, dt, node)
+            {
+                if (fdt_setprop_string(dt, child, "status", "disabled") < 0) {
+                    const char *child_name = fdt_get_name(dt, child, NULL);
+                    bail_cleanup("FDT: failed to set status property of %s/%s/%s\n", path, name,
+                                 child_name);
+                }
             }
         }
 
@@ -2413,7 +2530,7 @@ err:
     return ret;
 }
 
-static int dt_transfer_virtios(void)
+__attribute__((unused)) static int dt_transfer_virtios(void)
 {
     int path[3];
     path[0] = adt_path_offset(adt, "/arm-io/");
@@ -2424,7 +2541,7 @@ static int dt_transfer_virtios(void)
     if (aic == -FDT_ERR_NOTFOUND)
         aic = fdt_node_offset_by_compatible(dt, -1, "apple,aic2");
     if (aic == -FDT_ERR_NOTFOUND)
-        aic = fdt_node_offset_by_compatible(dt, -1, "apple,aic3");
+        aic = fdt_node_offset_by_compatible(dt, -1, "apple,t8122-aic3");
     if (aic < 0)
         bail("FDT: failed to find AIC node\n");
 
@@ -2553,6 +2670,38 @@ int kboot_set_chosen(const char *name, const char *value)
     if (value) {
         chosen_params[i][1] = calloc(strlen(value) + 1, 1);
         strcpy(chosen_params[i][1], value);
+    }
+
+    return i;
+}
+
+int kboot_set_uboot(const char *name, const char *value)
+{
+    int i = 0;
+
+    if (!name)
+        return -1;
+
+    for (i = 0; i < MAX_UBOOT_CONFIGS; i++) {
+        if (!uboot_config[i][0]) {
+            uboot_config[i][0] = calloc(strlen(name) + 1, 1);
+            strcpy(uboot_config[i][0], name);
+            break;
+        }
+
+        if (!strcmp(name, uboot_config[i][0])) {
+            free(uboot_config[i][1]);
+            uboot_config[i][1] = NULL;
+            break;
+        }
+    }
+
+    if (i >= MAX_UBOOT_CONFIGS)
+        return -1;
+
+    if (value) {
+        uboot_config[i][1] = calloc(strlen(value) + 1, 1);
+        strcpy(uboot_config[i][1], value);
     }
 
     return i;
@@ -2731,6 +2880,8 @@ int kboot_prepare_dt(void *fdt)
 
     if (dt_set_chosen())
         return -1;
+    if (dt_set_uboot_config())
+        return -1;
     if (dt_set_serial_number())
         return -1;
     if (dt_set_smbios())
@@ -2759,13 +2910,17 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_sep())
         return -1;
+    if (dt_set_pmp())
+        return -1;
     if (dt_set_nvram())
         return -1;
     if (dt_set_ipd())
         return -1;
-    if (dt_disable_missing_devs("usb-drd", "usb@", 8))
+    if (dt_disable_missing_devs("usb-drd", "usb@", 8, 0))
         return -1;
-    if (dt_disable_missing_devs("i2c", "i2c@", 8))
+    if (dt_disable_missing_devs("acio", "cio@", 8, 2))
+        return -1;
+    if (dt_disable_missing_devs("i2c", "i2c@", 8, 0))
         return -1;
     if (dt_setup_sio())
         return -1;
@@ -2779,6 +2934,16 @@ int kboot_prepare_dt(void *fdt)
     if (dt_transfer_virtios())
         return 1;
 #endif
+
+    /*
+     * Append generic "apple,*" not carried in the upstream Linux DT for t602x
+     * devices.
+     * DO NOT remove before 2027-07-01
+     */
+    if (fdt_node_check_compatible(dt, 0, "apple,t6020") == 0 ||
+        fdt_node_check_compatible(dt, 0, "apple,t6021") == 0 ||
+        fdt_node_check_compatible(dt, 0, "apple,t6022") == 0)
+        dt_fixup_t6020_compat(dt);
 
     /*
      * Set the /memory node late since we might be allocating from the top of memory

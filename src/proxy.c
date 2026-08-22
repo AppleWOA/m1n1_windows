@@ -32,6 +32,9 @@
 #include "minilzlib/minlzma.h"
 #include "tinf/tinf.h"
 
+void *rust_read_gigalocker(size_t *);
+void rust_free_gigalocker(void *, size_t);
+
 int proxy_process(ProxyRequest *request, ProxyReply *reply)
 {
     enum exc_guard_t guard_save = exc_guard;
@@ -54,6 +57,15 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         }
         case P_GET_BOOTARGS:
             reply->retval = boot_args_addr;
+            break;
+        case P_GET_CPU_FEATURES:
+            if (request->args[0] == sizeof(struct midr_part_features))
+                reply->retval = (u64)cpu_features;
+            else {
+                printf("size mismatch: sizeof(struct midr_part_features) = %ld != %ld\n",
+                       sizeof(struct midr_part_features), request->args[0]);
+                reply->retval = 0;
+            }
             break;
         case P_GET_BASE:
             reply->retval = (u64)_base;
@@ -379,6 +391,9 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_HEAPBLOCK_ALLOC:
             reply->retval = (u64)heapblock_alloc(request->args[0]);
             break;
+        case P_HEAPBLOCK_SET_LIMIT:
+            heapblock_set_limit((void *)request->args[0]);
+            break;
         case P_MALLOC:
             reply->retval = (u64)malloc(request->args[0]);
             break;
@@ -402,12 +417,15 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_KBOOT_PREPARE_DT:
             reply->retval = kboot_prepare_dt((void *)request->args[0]);
             break;
+        case P_KBOOT_SET_UBOOT:
+            reply->retval = kboot_set_uboot((void *)request->args[0], (void *)request->args[1]);
+            break;
 
         case P_PMGR_POWER_ENABLE:
             reply->retval = pmgr_power_enable(request->args[0]);
             break;
         case P_PMGR_POWER_DISABLE:
-            reply->retval = pmgr_power_enable(request->args[0]);
+            reply->retval = pmgr_power_disable(request->args[0]);
             break;
         case P_PMGR_ADT_POWER_ENABLE:
             reply->retval = pmgr_adt_power_enable((const char *)request->args[0]);
@@ -638,6 +656,21 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_CPUFREQ_INIT:
             reply->retval = cpufreq_init();
             break;
+
+        case P_READ_GIGALOCKER: {
+            size_t size = 0;
+            void *data = rust_read_gigalocker(&size);
+            size_t *cmd_buf = (size_t *)request->args[0];
+            cmd_buf[0] = (size_t)data;
+            cmd_buf[1] = size;
+            reply->retval = size == 0 ? -1 : 0;
+            break;
+        }
+        case P_FREE_GIGALOCKER: {
+            size_t *cmd_buf = (size_t *)request->args[0];
+            rust_free_gigalocker((void *)cmd_buf[0], cmd_buf[1]);
+            break;
+        }
 
         default:
             reply->status = S_BADCMD;

@@ -4,6 +4,7 @@
 #include "kboot_atc.h"
 #include "adt.h"
 #include "devicetree.h"
+#include "malloc.h"
 #include "pmgr.h"
 #include "utils.h"
 
@@ -69,15 +70,15 @@ struct atc_fuse_hw {
 static const struct adt_tunable_info atc_tunables[] = {
     /* global tunables applied after power on or reset */
     {"tunable_ATC0AXI2AF", "apple,tunable-axi2af", 0x0, 0x4000, true},
-    {"tunable_ATC_FABRIC", "apple,tunable-common", 0x45000, 0x4000, true},
-    {"tunable_USB_ACIOPHY_TOP", "apple,tunable-common", 0x0, 0x4000, true},
-    {"tunable_AUS_CMN_SHM", "apple,tunable-common", 0xa00, 0x4000, true},
-    {"tunable_AUS_CMN_TOP", "apple,tunable-common", 0x800, 0x4000, true},
-    {"tunable_AUSPLL_CORE", "apple,tunable-common", 0x2200, 0x4000, true},
-    {"tunable_AUSPLL_TOP", "apple,tunable-common", 0x2000, 0x4000, true},
-    {"tunable_CIO3PLL_CORE", "apple,tunable-common", 0x2a00, 0x4000, true},
-    {"tunable_CIO3PLL_TOP", "apple,tunable-common", 0x2800, 0x4000, true},
-    {"tunable_CIO_CIO3PLL_TOP", "apple,tunable-common", 0x2800, 0x4000, false},
+    {"tunable_ATC_FABRIC", "apple,tunable-common-b", 0x45000, 0x4000, true},
+    {"tunable_USB_ACIOPHY_TOP", "apple,tunable-common-b", 0x0, 0x4000, true},
+    {"tunable_AUS_CMN_SHM", "apple,tunable-common-b", 0xa00, 0x4000, true},
+    {"tunable_AUS_CMN_TOP", "apple,tunable-common-b", 0x800, 0x4000, true},
+    {"tunable_AUSPLL_CORE", "apple,tunable-common-b", 0x2200, 0x4000, true},
+    {"tunable_AUSPLL_TOP", "apple,tunable-common-b", 0x2000, 0x4000, true},
+    {"tunable_CIO3PLL_CORE", "apple,tunable-common-b", 0x2a00, 0x4000, true},
+    {"tunable_CIO3PLL_TOP", "apple,tunable-common-b", 0x2800, 0x4000, true},
+    {"tunable_CIO_CIO3PLL_TOP", "apple,tunable-common-b", 0x2800, 0x4000, false},
     /* lane-specific tunables applied after a cable is connected */
     {"tunable_DP_LN0_AUSPMA_TX_TOP", "apple,tunable-lane0-dp", 0xc000, 0x1000, true},
     {"tunable_DP_LN1_AUSPMA_TX_TOP", "apple,tunable-lane1-dp", 0x13000, 0x1000, true},
@@ -97,6 +98,48 @@ static const struct adt_tunable_info atc_tunables[] = {
     {"tunable_CIO_LN1_AUSPMA_RX_TOP", "apple,tunable-lane1-cio", 0x10000, 0x1000, true},
     {"tunable_CIO_LN1_AUSPMA_RX_SHM", "apple,tunable-lane1-cio", 0x12000, 0x1000, true},
     {"tunable_CIO_LN1_AUSPMA_RX_EQ", "apple,tunable-lane1-cio", 0x11000, 0x1000, true},
+};
+
+static const struct adt_tunable_info atc_tunables_t8122[] = {
+    {"tunable_ATC0AXI2AF", "apple,tunable-axi2af", 0x0, 0x8000, true},
+    {"tunable_ATC_FABRIC", "apple,tunable-common-b", 0x44000, 0x4000, true},
+
+    {"tunable_CIO3PLL_CORE", "apple,tunable-common-b", 0x2a00, 0x200, true},
+    {"tunable_CIO3PLL_TOP", "apple,tunable-common-b", 0x2800, 0x200, true},
+    {"tunable_ACIOPHY_LANE_USBC0", "apple,tunable-common-b", 0x5000, 0x1000, true},
+    {"tunable_ACIOPHY_PLL_TOP", "apple,tunable-common-b", 0x1000, 0x4000, true},
+    {"tunable_ACIOPHY_TOP", "apple,tunable-common-b", 0x0, 0x4000, true},
+
+    {"tunable_AUSCMN_DIG", "apple,tunable-common-b", 0x800, 0x200, true},
+    {"tunable_AUSPLL_CORE", "apple,tunable-common-b", 0x2200, 0x4000, true},
+    //{"tunable_AUX_SHM", "apple,tunable-common-b", 0x0, 0x0, true}, // TODO: offset?
+    {"tunable_AUX_TOP", "apple,tunable-common-b", 0x16000, 0x4000, true},
+    {"tunable_AUSCMN_SHM", "apple,tunable-common-b", 0xa00, 0x200, true},
+    {"tunable_CLKMON_CFG", "apple,tunable-common-b", 0x2600, 0x100, false},
+
+    {"tunable_LN0_RX_TOP_USB_DFLT", "apple,tunable-lane0-usb", 0x9000, 0x1000, true},
+    {"tunable_LN0_RX_TOP_USB_EQA", "apple,tunable-lane0-usb", 0x9000, 0x1000, false},
+    {"tunable_LN0_RX_EQ_USB_EQA", "apple,tunable-lane0-usb", 0xa000, 0x1000, true},
+    {"tunable_LN0_RX_SHM_USB_DFLT", "apple,tunable-lane0-usb", 0xb000, 0x1000, true},
+    {"tunable_LN0_TX_TOP_USB_DFLT", "apple,tunable-lane0-usb", 0xc000, 0x1000, true},
+    {"tunable_LN0_TX_SHM_USB_DFLT", "apple,tunable-lane0-usb", 0xd000, 0x1000, true},
+    {"tunable_LN0_RX_TOP_CIO_DFLT", "apple,tunable-lane0-cio", 0x9000, 0x1000, true},
+    {"tunable_LN0_RX_EQ_CIO_EQA", "apple,tunable-lane0-cio", 0xa000, 0x1000, true},
+    {"tunable_LN0_RX_SHM_CIO_DFLT", "apple,tunable-lane0-cio", 0xb000, 0x1000, true},
+    {"tunable_LN0_TX_TOP_CIO_DFLT", "apple,tunable-lane0-cio", 0xc000, 0x1000, true},
+    {"tunable_LN0_TX_SHM_CIO_DFLT", "apple,tunable-lane0-cio", 0xd000, 0x1000, true},
+
+    {"tunable_LN1_RX_TOP_USB_DFLT", "apple,tunable-lane1-usb", 0x10000, 0x1000, true},
+    {"tunable_LN1_RX_TOP_USB_EQA", "apple,tunable-lane1-usb", 0x10000, 0x1000, false},
+    {"tunable_LN1_RX_EQ_USB_EQA", "apple,tunable-lane1-usb", 0x11000, 0x1000, true},
+    {"tunable_LN1_RX_SHM_USB_DFLT", "apple,tunable-lane1-usb", 0x12000, 0x1000, true},
+    {"tunable_LN1_TX_TOP_USB_DFLT", "apple,tunable-lane1-usb", 0x13000, 0x1000, true},
+    {"tunable_LN1_TX_SHM_USB_DFLT", "apple,tunable-lane1-usb", 0x14000, 0x1000, true},
+    {"tunable_LN1_RX_TOP_CIO_DFLT", "apple,tunable-lane1-cio", 0x10000, 0x1000, true},
+    {"tunable_LN1_RX_EQ_CIO_EQA", "apple,tunable-lane1-cio", 0x11000, 0x1000, true},
+    {"tunable_LN1_RX_SHM_CIO_DFLT", "apple,tunable-lane1-cio", 0x12000, 0x1000, true},
+    {"tunable_LN1_TX_TOP_CIO_DFLT", "apple,tunable-lane1-cio", 0x13000, 0x1000, true},
+    {"tunable_LN1_TX_SHM_CIO_DFLT", "apple,tunable-lane1-cio", 0x14000, 0x1000, true},
 };
 
 static const struct atc_fuse_info atc_fuses_t8103_port0[] = {
@@ -127,10 +170,127 @@ static const struct atc_fuse_info atc_fuses_t8103_port1[] = {
     {0x23d2bc438, 14, 4, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
 };
 
+static const struct atc_fuse_info atc_fuses_t6000_port0[] = {
+    {0x2922bca14, 5, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE0},
+    {0x2922bca14, 11, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE1},
+    {0x2922bca14, 17, 2, CIO3PLL_FRACN_CAN, CIO3PLL_DLL_CAL_START_CAPCODE},
+    {0x2922bca14, 19, 3, CIO3PLL_DTC_VREG, CIO3PLL_DTC_VREG_ADJUST},
+    {0x2922bca14, 0, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+    {0x2922bca10, 25, 2, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_ENCAP_EFUSE},
+    {0x2922bca10, 22, 3, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_BIAS_ADJUST_EFUSE},
+    {0x2922bca10, 30, 2, AUSPLL_FRACN_CAN, AUSPLL_DLL_START_CAPCODE},
+    {0x2922bca10, 27, 3, AUSPLL_CLKOUT_DTC_VREG, AUSPLL_DTC_VREG_ADJUST},
+    {0x2922bca14, 0, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+};
+
+static const struct atc_fuse_info atc_fuses_t6000_port1[] = {
+    {0x2922bca18, 15, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE0},
+    {0x2922bca18, 21, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE1},
+    {0x2922bca18, 27, 2, CIO3PLL_FRACN_CAN, CIO3PLL_DLL_CAL_START_CAPCODE},
+    {0x2922bca18, 29, 3, CIO3PLL_DTC_VREG, CIO3PLL_DTC_VREG_ADJUST},
+    {0x2922bca18, 10, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+    {0x2922bca18, 3, 2, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_ENCAP_EFUSE},
+    {0x2922bca18, 0, 3, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_BIAS_ADJUST_EFUSE},
+    {0x2922bca18, 8, 2, AUSPLL_FRACN_CAN, AUSPLL_DLL_START_CAPCODE},
+    {0x2922bca18, 5, 3, AUSPLL_CLKOUT_DTC_VREG, AUSPLL_DTC_VREG_ADJUST},
+    {0x2922bca18, 10, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+};
+
+static const struct atc_fuse_info atc_fuses_t6000_port2[] = {
+    {0x2922bca1c, 25, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE0},
+    {0x2922bca1c, 31, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE1},
+    {0x2922bca20, 5, 2, CIO3PLL_FRACN_CAN, CIO3PLL_DLL_CAL_START_CAPCODE},
+    {0x2922bca20, 7, 3, CIO3PLL_DTC_VREG, CIO3PLL_DTC_VREG_ADJUST},
+    {0x2922bca1c, 20, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+    {0x2922bca1c, 13, 2, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_ENCAP_EFUSE},
+    {0x2922bca1c, 10, 3, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_BIAS_ADJUST_EFUSE},
+    {0x2922bca1c, 18, 2, AUSPLL_FRACN_CAN, AUSPLL_DLL_START_CAPCODE},
+    {0x2922bca1c, 15, 3, AUSPLL_CLKOUT_DTC_VREG, AUSPLL_DTC_VREG_ADJUST},
+    {0x2922bca1c, 20, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+};
+
+static const struct atc_fuse_info atc_fuses_t6000_port3[] = {
+    {0x2922bca24, 3, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE0},
+    {0x2922bca24, 9, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE1},
+    {0x2922bca24, 15, 2, CIO3PLL_FRACN_CAN, CIO3PLL_DLL_CAL_START_CAPCODE},
+    {0x2922bca24, 17, 3, CIO3PLL_DTC_VREG, CIO3PLL_DTC_VREG_ADJUST},
+    {0x2922bca20, 30, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+    {0x2922bca20, 23, 2, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_ENCAP_EFUSE},
+    {0x2922bca20, 20, 3, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_BIAS_ADJUST_EFUSE},
+    {0x2922bca20, 28, 2, AUSPLL_FRACN_CAN, AUSPLL_DLL_START_CAPCODE},
+    {0x2922bca20, 25, 3, AUSPLL_CLKOUT_DTC_VREG, AUSPLL_DTC_VREG_ADJUST},
+    {0x2922bca20, 30, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+};
+
+static const struct atc_fuse_info atc_fuses_t6000_port4[] = {
+    {0x22922bca14, 5, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE0},
+    {0x22922bca14, 11, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE1},
+    {0x22922bca14, 17, 2, CIO3PLL_FRACN_CAN, CIO3PLL_DLL_CAL_START_CAPCODE},
+    {0x22922bca14, 19, 3, CIO3PLL_DTC_VREG, CIO3PLL_DTC_VREG_ADJUST},
+    {0x22922bca14, 0, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+    {0x22922bca10, 25, 2, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_ENCAP_EFUSE},
+    {0x22922bca10, 22, 3, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_BIAS_ADJUST_EFUSE},
+    {0x22922bca10, 30, 2, AUSPLL_FRACN_CAN, AUSPLL_DLL_START_CAPCODE},
+    {0x22922bca10, 27, 3, AUSPLL_CLKOUT_DTC_VREG, AUSPLL_DTC_VREG_ADJUST},
+    {0x22922bca14, 0, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+};
+
+static const struct atc_fuse_info atc_fuses_t6000_port5[] = {
+    {0x22922bca18, 15, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE0},
+    {0x22922bca18, 21, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE1},
+    {0x22922bca18, 27, 2, CIO3PLL_FRACN_CAN, CIO3PLL_DLL_CAL_START_CAPCODE},
+    {0x22922bca18, 29, 3, CIO3PLL_DTC_VREG, CIO3PLL_DTC_VREG_ADJUST},
+    {0x22922bca18, 10, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+    {0x22922bca18, 3, 2, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_ENCAP_EFUSE},
+    {0x22922bca18, 0, 3, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_BIAS_ADJUST_EFUSE},
+    {0x22922bca18, 8, 2, AUSPLL_FRACN_CAN, AUSPLL_DLL_START_CAPCODE},
+    {0x22922bca18, 5, 3, AUSPLL_CLKOUT_DTC_VREG, AUSPLL_DTC_VREG_ADJUST},
+    {0x22922bca18, 10, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+};
+
+static const struct atc_fuse_info atc_fuses_t8112_port0[] = {
+    {0x23d2c8484, 3, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE0},
+    {0x23d2c8484, 9, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE1},
+    {0x23d2c8484, 15, 2, CIO3PLL_FRACN_CAN, CIO3PLL_DLL_CAL_START_CAPCODE},
+    {0x23d2c8484, 17, 3, CIO3PLL_DTC_VREG, CIO3PLL_DTC_VREG_ADJUST},
+    {0x23d2c8480, 30, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+    {0x23d2c8480, 23, 2, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_ENCAP_EFUSE},
+    {0x23d2c8480, 20, 3, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_BIAS_ADJUST_EFUSE},
+    {0x23d2c8480, 28, 2, AUSPLL_FRACN_CAN, AUSPLL_DLL_START_CAPCODE},
+    {0x23d2c8480, 25, 3, AUSPLL_CLKOUT_DTC_VREG, AUSPLL_DTC_VREG_ADJUST},
+    {0x23d2c8480, 30, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+};
+
+static const struct atc_fuse_info atc_fuses_t8112_port1[] = {
+    {0x23d2c8488, 13, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE0},
+    {0x23d2c8488, 19, 6, CIO3PLL_DCO_NCTRL, CIO3PLL_DCO_COARSEBIN_EFUSE1},
+    {0x23d2c8488, 25, 2, CIO3PLL_FRACN_CAN, CIO3PLL_DLL_CAL_START_CAPCODE},
+    {0x23d2c8488, 27, 3, CIO3PLL_DTC_VREG, CIO3PLL_DTC_VREG_ADJUST},
+    {0x23d2c8488, 8, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+    {0x23d2c8488, 1, 2, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_ENCAP_EFUSE},
+    {0x23d2c8484, 30, 3, AUSPLL_DCO_EFUSE_SPARE, AUSPLL_RODCO_BIAS_ADJUST_EFUSE},
+    {0x23d2c8488, 6, 2, AUSPLL_FRACN_CAN, AUSPLL_DLL_START_CAPCODE},
+    {0x23d2c8488, 3, 3, AUSPLL_CLKOUT_DTC_VREG, AUSPLL_DTC_VREG_ADJUST},
+    {0x23d2c8488, 8, 5, AUS_COMMON_SHIM_BLK_VREG, AUS_VREG_TRIM},
+};
+
+// Order "atc-phy" compatibles in reverse chronologically order to deal with mutliple compatible
+// strings in ADT atc-phy nodes.
 static const struct atc_fuse_hw atc_fuses[] = {
+    {"atc-phy,t8132", -1, NULL, 0},
+    {"atc-phy,t8122", -1, NULL, 0},
+    {"atc-phy,t6020", -1, NULL, 0},
+    {"atc-phy,t8112", 0, atc_fuses_t8112_port0, ARRAY_SIZE(atc_fuses_t8112_port0)},
+    {"atc-phy,t8112", 1, atc_fuses_t8112_port1, ARRAY_SIZE(atc_fuses_t8112_port1)},
+    /* t6002 uses the same fuses and the same atc-phy,t6000 compatible */
+    {"atc-phy,t6000", 0, atc_fuses_t6000_port0, ARRAY_SIZE(atc_fuses_t6000_port0)},
+    {"atc-phy,t6000", 1, atc_fuses_t6000_port1, ARRAY_SIZE(atc_fuses_t6000_port1)},
+    {"atc-phy,t6000", 2, atc_fuses_t6000_port2, ARRAY_SIZE(atc_fuses_t6000_port2)},
+    {"atc-phy,t6000", 3, atc_fuses_t6000_port3, ARRAY_SIZE(atc_fuses_t6000_port3)},
+    {"atc-phy,t6000", 4, atc_fuses_t6000_port4, ARRAY_SIZE(atc_fuses_t6000_port4)},
+    {"atc-phy,t6000", 5, atc_fuses_t6000_port5, ARRAY_SIZE(atc_fuses_t6000_port5)},
     {"atc-phy,t8103", 0, atc_fuses_t8103_port0, ARRAY_SIZE(atc_fuses_t8103_port0)},
     {"atc-phy,t8103", 1, atc_fuses_t8103_port1, ARRAY_SIZE(atc_fuses_t8103_port1)},
-    {"atc-phy,t6020", -1, NULL, 0},
 };
 
 static u32 read_fuse(const struct atc_fuse_info *fuse)
@@ -166,11 +326,11 @@ static int dt_append_atc_fuses_helper(void *dt, int fdt_node, const struct atc_f
                                       size_t n_fuses)
 {
     for (size_t i = 0; i < n_fuses; ++i) {
-        if (fdt_appendprop_u32(dt, fdt_node, "apple,tunable-fuses", fuses[i].reg_offset) < 0)
+        if (fdt_appendprop_u32(dt, fdt_node, "apple,tunable-common-a", fuses[i].reg_offset) < 0)
             return -1;
-        if (fdt_appendprop_u32(dt, fdt_node, "apple,tunable-fuses", fuses[i].reg_mask) < 0)
+        if (fdt_appendprop_u32(dt, fdt_node, "apple,tunable-common-a", fuses[i].reg_mask) < 0)
             return -1;
-        if (fdt_appendprop_u32(dt, fdt_node, "apple,tunable-fuses", read_fuse(&fuses[i])) < 0)
+        if (fdt_appendprop_u32(dt, fdt_node, "apple,tunable-common-a", read_fuse(&fuses[i])) < 0)
             return -1;
     }
 
@@ -180,7 +340,7 @@ static int dt_append_atc_fuses_helper(void *dt, int fdt_node, const struct atc_f
 static int dt_append_fuses(void *dt, int adt_node, int fdt_node, int port)
 {
     for (size_t i = 0; i < ARRAY_SIZE(atc_fuses); ++i) {
-        if (!adt_is_compatible(adt, adt_node, atc_fuses[i].compatible))
+        if (!adt_is_compatible_at(adt, adt_node, atc_fuses[i].compatible, 0))
             continue;
         if (atc_fuses[i].port >= 0 && port != atc_fuses[i].port)
             continue;
@@ -190,7 +350,7 @@ static int dt_append_fuses(void *dt, int adt_node, int fdt_node, int port)
          * property to indicate to the driver that no fuses are intentional.
          */
         if (!atc_fuses[i].fuses)
-            return fdt_setprop(dt, fdt_node, "apple,tunable-fuses", NULL, 0);
+            return fdt_setprop(dt, fdt_node, "apple,tunable-common-a", NULL, 0);
 
         return dt_append_atc_fuses_helper(dt, fdt_node, atc_fuses[i].fuses, atc_fuses[i].n_fuses);
     }
@@ -209,6 +369,11 @@ static int dt_append_atc_tunable(void *dt, int adt_node, int fdt_node,
     u32 tunables_len;
     const struct atc_tunable *tunable_adt =
         adt_getprop(adt, adt_node, tunable_info->adt_name, &tunables_len);
+
+    // Alias tunable_ATC0AXI2AF to tunable_ATCAXI2AF, seen on M4 Mac mini (J773g)
+    if (!tunable_adt && !strcmp(tunable_info->adt_name, "tunable_ATC0AXI2AF")) {
+        tunable_adt = adt_getprop(adt, adt_node, "tunable_ATCAXI2AF", &tunables_len);
+    }
 
     if (!tunable_adt) {
         printf("ADT: tunable %s not found\n", tunable_info->adt_name);
@@ -258,6 +423,8 @@ static int dt_append_atc_tunable(void *dt, int adt_node, int fdt_node,
 static void dt_copy_atc_tunables(void *dt, const char *adt_path, const char *dt_alias, int port)
 {
     int ret;
+    const struct adt_tunable_info *tunables;
+    size_t tunable_count;
 
     int adt_node = adt_path_offset(adt, adt_path);
     if (adt_node < 0)
@@ -282,10 +449,48 @@ static void dt_copy_atc_tunables(void *dt, const char *adt_path, const char *dt_
         goto cleanup;
     }
 
-    for (size_t i = 0; i < sizeof(atc_tunables) / sizeof(*atc_tunables); ++i) {
-        ret = dt_append_atc_tunable(dt, adt_node, fdt_node, &atc_tunables[i]);
+    if (adt_is_compatible_at(adt, adt_node, "atc-phy,t8122", 0) ||
+        adt_is_compatible_at(adt, adt_node, "atc-phy,t8132", 0)) {
+        tunables = &atc_tunables_t8122[0];
+        tunable_count = sizeof(atc_tunables_t8122) / sizeof(*atc_tunables_t8122);
+    } else {
+        tunables = &atc_tunables[0];
+        tunable_count = sizeof(atc_tunables) / sizeof(*atc_tunables);
+    }
+
+    for (size_t i = 0; i < tunable_count; ++i) {
+        ret = dt_append_atc_tunable(dt, adt_node, fdt_node, &tunables[i]);
         if (ret)
             goto cleanup;
+    }
+
+    /*
+     * For backwards compatibility with downstream drivers copy apple,tunable-common-b to
+     * apple,tunable-common.
+     * Don't remove this before 2027-01-01.
+     */
+    int prop_len;
+    const void *tunable_common_b_fdt =
+        fdt_getprop(dt, fdt_node, "apple,tunable-common-b", &prop_len);
+    if (!tunable_common_b_fdt) {
+        printf("kboot: Unable to find apple,tunable-common-b for %s\n", adt_path);
+        goto cleanup;
+    }
+
+    void *tunable_common_b = malloc(prop_len);
+    if (!tunable_common_b) {
+        printf("kboot: Unable to copy apple,tunable-common-b to apple,tunable-common for %s\n",
+               adt_path);
+        goto cleanup;
+    }
+    memcpy(tunable_common_b, tunable_common_b_fdt, prop_len);
+
+    ret = fdt_setprop(dt, fdt_node, "apple,tunable-common", tunable_common_b, prop_len);
+    free(tunable_common_b);
+    if (ret) {
+        printf("kboot: Unable to copy apple,tunable-common-b to apple,tunable-common for %s\n",
+               adt_path);
+        goto cleanup;
     }
 
     return;
@@ -298,7 +503,8 @@ cleanup:
      */
     for (size_t i = 0; i < sizeof(atc_tunables) / sizeof(*atc_tunables); ++i)
         fdt_delprop(dt, fdt_node, atc_tunables[i].fdt_name);
-    fdt_delprop(dt, fdt_node, "apple,tunable-fuses");
+    fdt_delprop(dt, fdt_node, "apple,tunable-common-a");
+    fdt_delprop(dt, fdt_node, "apple,tunable-common");
 
     printf("FDT: Unable to setup ATC tunables for %s - USB3/Thunderbolt will not work\n", adt_path);
 }

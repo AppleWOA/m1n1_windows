@@ -5,6 +5,9 @@
 
 #include "types.h"
 
+// declarations for kboot_t6020_compat.c
+int dt_fixup_t6020_compat(void *dt);
+
 struct kernel_header {
     u32 code[2];     /* Executable code */
     u64 text_offset; /* Image load offset, little endian */
@@ -19,8 +22,12 @@ struct kernel_header {
 
 void kboot_set_initrd(void *start, size_t size);
 int kboot_set_chosen(const char *name, const char *value);
+int kboot_set_uboot(const char *name, const char *value);
 int kboot_prepare_dt(void *fdt);
 int kboot_prepare_adt(void);
 int kboot_boot(void *kernel);
+
+// from rust/usb4.rs
+u64 rust_usb4_router_uuid(void);
 
 #endif

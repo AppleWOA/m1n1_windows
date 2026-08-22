@@ -3,24 +3,31 @@ RUSTARCH ?= aarch64-unknown-none-softfloat
 ifeq ($(shell uname),Darwin)
 USE_CLANG ?= 1
 $(info INFO: Building on Darwin)
+
+ifeq ($(shell command -v llvm-config 2>/dev/null),)
 BREW ?= $(shell command -v brew)
-TOOLCHAIN ?= $(shell $(BREW) --prefix llvm)/bin/
-ifeq ($(shell ls $(TOOLCHAIN)/ld.lld 2>/dev/null),)
+LLVMCONFIG ?= $(shell $(BREW) --prefix llvm)/bin/llvm-config
+else
+LLVMCONFIG ?= $(shell command -v llvm-config)
+endif
+TOOLCHAIN ?= $(shell $(LLVMCONFIG) --bindir)/
+$(info INFO: Toolchain path: $(TOOLCHAIN))
+
+ifeq ($(shell ls $(TOOLCHAIN)ld.lld 2>/dev/null),)
+BREW ?= $(shell command -v brew)
 LLDDIR ?= $(shell $(BREW) --prefix lld)/bin/
 else
 LLDDIR ?= $(TOOLCHAIN)
 endif
-$(info INFO: Toolchain path: $(TOOLCHAIN))
+ifneq ($(TOOLCHAIN),$(LLDDIR))
+$(info INFO: LLD path: $(LLDDIR))
+endif
 endif
 
 ifeq ($(shell uname -m),aarch64)
 ARCH ?=
 else
 ARCH ?= aarch64-linux-gnu-
-endif
-
-ifneq ($(TOOLCHAIN),$(LLDDIR))
-$(info INFO: LLD path: $(LLDDIR))
 endif
 
 ifeq ($(USE_CLANG),1)
@@ -54,6 +61,7 @@ BASE_CFLAGS := -O2 -Wall -g -Wundef -Werror=strict-prototypes -fno-common -fno-P
 	-Wsign-compare -Wunused-parameter -Wno-multichar \
 	-ffreestanding -fpic -ffunction-sections -fdata-sections \
 	-nostdinc -isystem $(shell $(CC) -print-file-name=include) -isystem sysinc \
+	-Isrc \
 	-fno-stack-protector -mstrict-align -march=armv8.2-a \
 	$(EXTRA_CFLAGS)
 
@@ -67,14 +75,15 @@ endif
 # Required for no_std + alloc for now
 export RUSTC_BOOTSTRAP=1
 RUST_LIB := librust.a
-ifeq ($(CHAINLOADING),1)
-CFG += CHAINLOADING
-endif
-
 ifeq ($(BUILDSTD),1)
 CARGO_FLAGS := -Z build-std=alloc,core
 else
 CARGO_FLAGS :=
+endif
+
+ifeq ($(CHAINLOADING),1)
+CFG += CHAINLOADING
+CARGO_FLAGS += --features chainload
 endif
 
 LDFLAGS := -EL -maarch64elf --no-undefined -X -Bsymbolic \
@@ -93,6 +102,18 @@ LIBFDT_OBJECTS := $(patsubst %,libfdt/%, \
 	fdt_addresses.o fdt_empty_tree.o fdt_ro.o fdt_rw.o fdt_strerror.o fdt_sw.o \
 	fdt_wip.o fdt.o)
 
+CHICKENS_OBJECTS := $(patsubst %,chickens/%, \
+	avalanche.o \
+	blizzard.o \
+	cyclone_typhoon.o \
+	everest.o \
+	firestorm.o \
+	hurricane_zephyr.o \
+	icestorm.o \
+	monsoon_mistral.o \
+	sawtooth.o \
+	twister.o)
+
 DCP_OBJECTS := $(patsubst %,dcp/%, \
 	dpav_ep.o \
 	dptx_phy.o \
@@ -109,16 +130,6 @@ OBJECTS := \
 	chainload.o \
 	chainload_asm.o \
 	chickens.o \
-	chickens_avalanche.o \
-	chickens_blizzard.o \
-	chickens_cyclone_typhoon.o \
-	chickens_everest.o \
-	chickens_firestorm.o \
-	chickens_hurricane_zephyr.o \
-	chickens_monsoon_mistral.o \
-	chickens_icestorm.o \
-	chickens_sawtooth.o \
-	chickens_twister.o \
 	clk.o \
 	cpufreq.o \
 	dapf.o \
@@ -127,6 +138,7 @@ OBJECTS := \
 	dcp_iboot.o \
 	devicetree.o \
 	display.o \
+	dockchannel_uart.o \
 	exception.o exception_asm.o \
 	fb.o font.o font_retina.o \
 	firmware.o \
@@ -138,6 +150,7 @@ OBJECTS := \
 	iova.o \
 	isp.o \
 	kboot.o kboot_atc.o \
+	kboot_t6020_compat.o \
 	main.o \
 	mitigations.o \
 	mcc.o \
@@ -154,6 +167,7 @@ OBJECTS := \
 	sio.o \
 	smc.o \
 	smp.o \
+	spmi.o \
 	start.o \
 	startup.o \
 	string.o \
@@ -165,8 +179,9 @@ OBJECTS := \
 	utils.o utils_asm.o \
 	vsprintf.o \
 	wdt.o \
+	$(CHICKENS_OBJECTS) \
 	$(DCP_OBJECTS) \
-	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS) $(RUST_LIB)
+	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS)
 
 FP_OBJECTS := \
 	kboot_gpu.o \
@@ -177,7 +192,8 @@ FP_OBJECTS := \
 
 BUILD_OBJS := $(patsubst %,build/%,$(OBJECTS))
 BUILD_FP_OBJS := $(patsubst %,build/%,$(FP_OBJECTS))
-BUILD_ALL_OBJS := $(BUILD_OBJS) $(BUILD_FP_OBJS)
+BUILD_RUST_LIB := $(patsubst %,build/%,$(RUST_LIB))
+BUILD_ALL_OBJS := $(BUILD_OBJS) $(BUILD_FP_OBJS) $(BUILD_RUST_LIB)
 NAME := m1n1
 TARGET := m1n1.macho
 TARGET_RAW := m1n1.bin
@@ -189,15 +205,15 @@ all: build/$(TARGET) build/$(TARGET_RAW)
 clean:
 	rm -rf build/* build/.deps
 format:
-	$(CLANG_FORMAT) -i src/*.c src/dcp/*.c src/math/*.c src/*.h src/dcp/*.h src/math/*.h sysinc/*.h
+	$(CLANG_FORMAT) -i src/*.c src/chickens/*.c src/dcp/*.c src/math/*.c src/*.h src/dcp/*.h src/math/*.h sysinc/*.h
 format-check:
-	$(CLANG_FORMAT) --dry-run --Werror src/*.c src/dcp/*.c src/math/*.c src/*.h src/dcp/*.h src/math/*.h sysinc/*.h
+	$(CLANG_FORMAT) --dry-run --Werror src/*.c src/chickens/*.c src/dcp/*.c src/math/*.c src/*.h src/dcp/*.h src/math/*.h sysinc/*.h
 rustfmt:
 	cd rust && cargo fmt
 rustfmt-check:
 	cd rust && cargo fmt --check
 
-build/$(RUST_LIB): rust/src/* rust/*
+build/$(RUST_LIB): src/../build/build_cfg.h rust/src/*.rs rust/src/gpu/*.rs rust/src/gpu/hw/*.rs rust/Cargo.toml rust/Cargo.lock
 	$(QUIET)echo "  RS    $@"
 	$(QUIET)mkdir -p $(DEPDIR)
 	$(QUIET)mkdir -p "$(dir $@)"

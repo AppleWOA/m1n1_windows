@@ -42,9 +42,8 @@
 #define NVME_LINEAR_SQ_CTRL    0x24908
 #define NVME_LINEAR_SQ_CTRL_EN BIT(0)
 
-#define NVME_UNKNOWN_CTRL                0x24008
-#define NVME_UNKNOWN_CTRL_PRP_NULL_CHECK BIT(11)
-
+#define NVME_IOQ_CMDS           0x1200
+#define NVME_IOQ_CQES           0x1208
 #define NVME_MAX_PEND_CMDS_CTRL 0x1210
 #define NVME_DB_LINEAR_ASQ      0x2490c
 #define NVME_DB_LINEAR_IOSQ     0x24910
@@ -64,6 +63,9 @@
 #define NVME_CMD_FLUSH 0x00
 #define NVME_CMD_WRITE 0x01
 #define NVME_CMD_READ  0x02
+
+#define NVMMU_TCB_DMA_FROM_DEVICE BIT(0)
+#define NVMMU_TCB_DMA_TO_DEVICE   BIT(1)
 
 struct nvme_command {
     u8 opcode;
@@ -120,6 +122,11 @@ static_assert(sizeof(struct nvme_command) == 64, "invalid nvme_command size");
 static_assert(sizeof(struct nvme_completion) == 16, "invalid nvme_completion size");
 static_assert(sizeof(struct apple_nvmmu_tcb) == 128, "invalid apple_nvmmu_tcb size");
 
+static enum {
+    NVME_T8103 = 0,
+    NVME_T8132 = 1,
+} nvme_type;
+
 static bool nvme_initialized = false;
 static u8 nvme_die;
 
@@ -128,6 +135,7 @@ static rtkit_dev_t *nvme_rtkit = NULL;
 static sart_dev_t *nvme_sart = NULL;
 
 static u64 nvme_base;
+static u64 nvmmu_base;
 
 static struct nvme_queue adminq, ioq;
 
@@ -220,8 +228,13 @@ static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, u6
     queue_cmd->tag = tag;
 
     memset(tcb, 0, sizeof(*tcb));
-    tcb->opcode = queue_cmd->opcode;
-    tcb->dma_flags = 3; // always allow read+write to the PRP pages
+    tcb->opcode = 0;
+    if (!queue_cmd->prp1)
+        tcb->dma_flags = 0;
+    else if (queue_cmd->opcode & 1)
+        tcb->dma_flags = NVMMU_TCB_DMA_TO_DEVICE;
+    else
+        tcb->dma_flags = NVMMU_TCB_DMA_FROM_DEVICE;
     tcb->slot_id = tag;
     tcb->len = queue_cmd->cdw12;
     tcb->prp1 = queue_cmd->prp1;
@@ -256,8 +269,8 @@ static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, u6
             printf("nvme: invalid tag in CQ: expected %d but got %d\n", tag, cqe.tag);
         }
 
-        write32(nvme_base + NVMMU_TCB_INVAL, cqe.tag);
-        if (read32(nvme_base + NVMMU_TCB_STAT))
+        write32(nvmmu_base + NVMMU_TCB_INVAL, cqe.tag);
+        if (read32(nvmmu_base + NVMMU_TCB_STAT))
             printf("nvme: NVMMU invalidation for tag %d failed\n", cqe.tag);
 
         /* increment head and switch phase once the end of the queue has been reached */
@@ -302,10 +315,28 @@ bool nvme_init(void)
         return NULL;
     }
 
-    if (adt_get_reg(adt, adt_path, "reg", 3, &nvme_base, NULL) < 0) {
-        printf("nvme: Error getting NVMe base address.\n");
+    if (adt_get_property(adt, node, "nvme-secure-bar"))
+        // M4+ generations have the nvme-secure-bar property and 10+ regs.
+        // They use reg[3] for NVMMU registers and reg[9] for NVMe registers,
+        // and require extra writes to set up the IO queues.
+        nvme_type = NVME_T8132;
+    else
+        // M1-M3 generations use reg[3] for both NVMMU and NVMe registers.
+        nvme_type = NVME_T8103;
+
+    if (adt_get_reg(adt, adt_path, "reg", 3, &nvmmu_base, NULL) < 0) {
+        printf("nvme: Error getting NVMMU base address.\n");
         return NULL;
     }
+    if (nvme_type == NVME_T8132) {
+        if (adt_get_reg(adt, adt_path, "reg", 9, &nvme_base, NULL) < 0) {
+            printf("nvme: Error getting NVMe base address.\n");
+            return NULL;
+        }
+    } else {
+        nvme_base = nvmmu_base;
+    }
+
     u32 cg;
     if (ADT_GETPROP(adt, node, "clock-gates", &cg) < 0) {
         printf("nvme: clock-gates not set\n");
@@ -349,12 +380,11 @@ bool nvme_init(void)
 
     /* setup controller and NVMMU for linear submission queue */
     set32(nvme_base + NVME_LINEAR_SQ_CTRL, NVME_LINEAR_SQ_CTRL_EN);
-    clear32(nvme_base + NVME_UNKNOWN_CTRL, NVME_UNKNOWN_CTRL_PRP_NULL_CHECK);
     write32(nvme_base + NVME_MAX_PEND_CMDS_CTRL,
             ((NVME_QUEUE_SIZE - 1) << 16) | (NVME_QUEUE_SIZE - 1));
-    write32(nvme_base + NVMMU_NUM, NVME_QUEUE_SIZE - 1);
-    write64_lo_hi(nvme_base + NVMMU_ASQ_BASE, (u64)adminq.tcbs);
-    write64_lo_hi(nvme_base + NVMMU_IOSQ_BASE, (u64)ioq.tcbs);
+    write32(nvmmu_base + NVMMU_NUM, NVME_QUEUE_SIZE - 1);
+    write64_lo_hi(nvmmu_base + NVMMU_ASQ_BASE, (u64)adminq.tcbs);
+    write64_lo_hi(nvmmu_base + NVMMU_IOSQ_BASE, (u64)ioq.tcbs);
 
     /* setup admin queue */
     if (!nvme_ctrl_disable()) {
@@ -393,6 +423,14 @@ bool nvme_init(void)
     if (!nvme_exec_command(&adminq, &cmd, NULL)) {
         printf("nvme: create sq command failed\n");
         goto out_delete_cq;
+    }
+
+    if (nvme_type == NVME_T8132) {
+        // Extra write required to set up the IO queues on M4+.
+        // Otherwise, the ANS crashes and the crashlog says
+        // `I/O SQ  : 0x000000000` / `I/O CQ  : 0x000000000`.
+        write64_lo_hi(nvme_base + NVME_IOQ_CQES, (u64)ioq.cqes);
+        write64_lo_hi(nvme_base + NVME_IOQ_CMDS, (u64)ioq.cmds);
     }
 
     nvme_initialized = true;
@@ -544,7 +582,7 @@ bool nvme_read(u32 nsid, u64 lba, void *buffer)
     cmd.prp1 = (u64)buffer_addr;
     cmd.cdw10 = lba;
     cmd.cdw11 = lba >> 32;
-    cmd.cdw12 = 1; // 4096 bytes
+    cmd.cdw12 = 0; // #blocks, 0-based -> 1 block a 4096 bytes
 
     return nvme_exec_command(&ioq, &cmd, NULL);
 }

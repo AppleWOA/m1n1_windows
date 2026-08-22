@@ -26,6 +26,7 @@ typedef enum {
     P_SLEEP,
     P_EL3_CALL,
     P_GET_CHIPID,
+    P_GET_CPU_FEATURES,
 
     P_WRITE64 = 0x100, // Generic register functions
     P_WRITE32,
@@ -97,11 +98,13 @@ typedef enum {
     P_MALLOC,
     P_MEMALIGN,
     P_FREE,
+    P_HEAPBLOCK_SET_LIMIT,
 
     P_KBOOT_BOOT = 0x700, // Kernel boot ops
     P_KBOOT_SET_CHOSEN,
     P_KBOOT_SET_INITRD,
     P_KBOOT_PREPARE_DT,
+    P_KBOOT_SET_UBOOT,
 
     P_PMGR_POWER_ENABLE = 0x800, // power/clock management ops
     P_PMGR_POWER_DISABLE,
@@ -182,6 +185,9 @@ typedef enum {
     P_DAPF_INIT,
 
     P_CPUFREQ_INIT = 0x1300,
+
+    P_READ_GIGALOCKER = 0x1400,
+    P_FREE_GIGALOCKER,
 } ProxyOp;
 
 #define S_OK     0

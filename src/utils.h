@@ -4,6 +4,7 @@
 #define UTILS_H
 
 #include "cpu_regs.h"
+#include "midr.h"
 #include "soc.h"
 #include "types.h"
 
@@ -333,7 +334,7 @@ static inline void write64_lo_hi(u64 addr, u64 val)
 #define dma_wmb() sysop("dmb oshst")
 
 extern u32 board_id, chip_id;
-static inline bool has_ecores(void)
+static inline bool is_heterogeneous(void)
 {
     return !(chip_id == S5L8960X || chip_id == T7000 || chip_id == T7001 || chip_id == S8000 ||
              chip_id == S8001 || chip_id == S8003);
@@ -341,7 +342,14 @@ static inline bool has_ecores(void)
 
 static inline int is_ecore(void)
 {
-    return has_ecores() && !(mrs(MPIDR_EL1) & (1 << 16));
+    if (!is_heterogeneous())
+        return false;
+    u32 mpidr_el1 = mrs(MPIDR_EL1);
+    if (mpidr_el1 & MIDR_CORE_TYPE_P)
+        return false;
+    if (mpidr_el1 & MIDR_CORE_TYPE_M)
+        return false;
+    return true;
 }
 
 static inline int in_el2(void)
@@ -499,7 +507,7 @@ struct midr_part_features {
     enum cpufeat_uncore_version uncore_version;
     bool disable_dc_mva;
     bool acc_cfg;
-    bool cyc_ovrd;
+    bool apple_sysregs_unlocked;
     bool workaround_cyclone_cache;
     bool nex_powergating;
     bool fast_ipi;
@@ -507,6 +515,7 @@ struct midr_part_features {
     bool siq_cfg;
     bool amx;
     bool actlr_el2;
+    bool counter_redirect;
 };
 
 extern bool is_mac;

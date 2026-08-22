@@ -47,6 +47,14 @@ struct tz_regs t8103_tz_regs = {
     .enable = 0x6a8,
 };
 
+struct tz_regs t8122_tz_regs = {
+    .count = 4,
+    .stride = 0x14,
+    .start = 0x6cc,
+    .end = 0x6d0,
+    .enable = 0x6d8,
+};
+
 struct tz_regs t602x_tz_regs = {
     .count = 4,
     .stride = 0x14,
@@ -55,7 +63,15 @@ struct tz_regs t602x_tz_regs = {
     .enable = 0x6c8,
 };
 
-struct tz_regs t603x_tz_regs = {
+struct tz_regs t6030_tz_regs = {
+    .count = 4,
+    .stride = 0x14,
+    .start = 0x6dc,
+    .end = 0x6e0,
+    .enable = 0x6e8,
+};
+
+struct tz_regs t6031_tz_regs = {
     .count = 4,
     .stride = 0x14,
     .start = 0x6d8,
@@ -91,6 +107,12 @@ struct tz_regs t603x_tz_regs = {
      FIELD_PREP(T8103_CACHE_STATUS_TAG_COUNT, T8103_CACHE_WAYS))
 
 #define T8112_CACHE_DISABLE 0x424
+
+#define T8122_CACHE_WAYS        16
+#define T8122_CACHE_STATUS_MASK (T6000_CACHE_STATUS_DATA_COUNT | T6000_CACHE_STATUS_TAG_COUNT)
+#define T8122_CACHE_STATUS_VAL                                                                     \
+    (FIELD_PREP(T6000_CACHE_STATUS_DATA_COUNT, T8122_CACHE_WAYS) |                                 \
+     FIELD_PREP(T6000_CACHE_STATUS_TAG_COUNT, T8122_CACHE_WAYS))
 
 #define CACHE_ENABLE_TIMEOUT 10000
 
@@ -318,38 +340,8 @@ int mcc_init_t6000(int node, int *path, bool t602x)
     return 0;
 }
 
-int mcc_init_t6031(int node, int *path)
+int mcc_init_t6031(int *path, u32 reg_offset, u32 plane_count, u32 dcs_count)
 {
-    u32 reg_len;
-    u32 reg_offset = 3;
-
-    if (!adt_getprop(adt, node, "reg", &reg_len)) {
-        printf("MCC: Failed to get reg property!\n");
-        return -1;
-    }
-
-    mcc_count = reg_len / 16 - reg_offset;
-
-    printf("MCC: Initializing T6031 MCCs (%d instances)...\n", mcc_count);
-
-    if (mcc_count > MAX_MCC_INSTANCES) {
-        printf("MCC: Too many instances, increase MAX_MCC_INSTANCES!\n");
-        mcc_count = MAX_MCC_INSTANCES;
-    }
-
-    u32 plane_count = 0;
-    u32 dcs_count = 0;
-
-    if (!ADT_GETPROP(adt, node, "dcs-count-per-amcc", &dcs_count)) {
-        printf("MCC: Failed to get dcs count!\n");
-        return -1;
-    }
-
-    if (!ADT_GETPROP(adt, node, "plane-count-per-amcc", &plane_count)) {
-        printf("MCC: Failed to get plane count!\n");
-        return -1;
-    }
-
     for (int i = 0; i < mcc_count; i++) {
         u64 base;
         if (adt_get_reg(adt, path, "reg", i + reg_offset, &base, NULL)) {
@@ -373,10 +365,90 @@ int mcc_init_t6031(int node, int *path)
         mcc_regs[i].cache_status_val = T6031_CACHE_STATUS_VAL;
         mcc_regs[i].cache_disable = 0;
 
-        mcc_regs[i].tz = &t603x_tz_regs;
+        mcc_regs[i].tz = &t6031_tz_regs;
     }
 
-    printf("MCC: Initialized T6031 MCCs (%d instances, %d planes, %d channels)\n", mcc_count,
+    return 0;
+}
+
+int mcc_init_t8122(int *path, u32 reg_offset, u32 plane_count, u32 dcs_count,
+                   struct tz_regs *tz_regs)
+{
+    for (int i = 0; i < mcc_count; i++) {
+        u64 base;
+        if (adt_get_reg(adt, path, "reg", i + reg_offset, &base, NULL)) {
+            printf("MCC: Failed to get reg index %d!\n", i + reg_offset);
+            return -1;
+        }
+
+        mcc_regs[i].plane_base = base + T6031_PLANE_OFFSET;
+        mcc_regs[i].plane_stride = T6031_PLANE_STRIDE;
+        mcc_regs[i].plane_count = plane_count;
+
+        mcc_regs[i].global_base = base + T6031_GLOBAL_OFFSET;
+
+        mcc_regs[i].dcs_base = base + T6031_DCS_OFFSET;
+        mcc_regs[i].dcs_stride = T6031_DCS_STRIDE;
+        mcc_regs[i].dcs_count = dcs_count;
+
+        mcc_regs[i].cache_enable_val = 1;
+        mcc_regs[i].cache_ways = T8122_CACHE_WAYS;
+        mcc_regs[i].cache_status_mask = T8122_CACHE_STATUS_MASK;
+        mcc_regs[i].cache_status_val = T8122_CACHE_STATUS_VAL;
+        mcc_regs[i].cache_disable = 0;
+
+        mcc_regs[i].tz = tz_regs;
+    }
+
+    return 0;
+}
+
+int mcc_init_m3(int node, int *path)
+{
+    u32 reg_len;
+    u32 reg_offset = 3;
+
+    if (!adt_getprop(adt, node, "reg", &reg_len)) {
+        printf("MCC: Failed to get reg property!\n");
+        return -1;
+    }
+
+    mcc_count = reg_len / 16 - reg_offset;
+
+    printf("MCC: Initializing M3* MCCs (%d instances)...\n", mcc_count);
+
+    if (mcc_count > MAX_MCC_INSTANCES) {
+        printf("MCC: Too many instances, increase MAX_MCC_INSTANCES!\n");
+        mcc_count = MAX_MCC_INSTANCES;
+    }
+
+    u32 plane_count = 0;
+    u32 dcs_count = 0;
+
+    if (!ADT_GETPROP(adt, node, "dcs-count-per-amcc", &dcs_count)) {
+        printf("MCC: Failed to get dcs count!\n");
+        return -1;
+    }
+
+    if (!ADT_GETPROP(adt, node, "plane-count-per-amcc", &plane_count)) {
+        printf("MCC: Failed to get plane count!\n");
+        return -1;
+    }
+
+    int ret = -1;
+    if (adt_is_compatible(adt, node, "mcc,t8122"))
+        ret = mcc_init_t8122(path, reg_offset, plane_count, dcs_count, &t8122_tz_regs);
+    else if (adt_is_compatible(adt, node, "mcc,t6030"))
+        ret = mcc_init_t8122(path, reg_offset, plane_count, dcs_count, &t6030_tz_regs);
+    else if (adt_is_compatible(adt, node, "mcc,t6031"))
+        ret = mcc_init_t6031(path, reg_offset, plane_count, dcs_count);
+    else
+        printf("MCC: Unsupported version:%s\n", adt_get_property(adt, node, "compatible")->value);
+
+    if (ret)
+        return ret;
+
+    printf("MCC: Initialized M3* MCCs (%d instances, %d planes, %d channels)\n", mcc_count,
            mcc_regs[0].plane_count, mcc_regs[0].dcs_count);
 
     mcc_initialized = true;
@@ -402,8 +474,12 @@ int mcc_init(void)
         return mcc_init_t6000(node, path, false);
     } else if (adt_is_compatible(adt, node, "mcc,t6020")) {
         return mcc_init_t6000(node, path, true);
+    } else if (adt_is_compatible(adt, node, "mcc,t8122")) {
+        return mcc_init_m3(node, path);
+    } else if (adt_is_compatible(adt, node, "mcc,t6030")) {
+        return mcc_init_m3(node, path);
     } else if (adt_is_compatible(adt, node, "mcc,t6031")) {
-        return mcc_init_t6031(node, path);
+        return mcc_init_m3(node, path);
     } else {
         printf("MCC: Unsupported version:%s\n", adt_get_property(adt, node, "compatible")->value);
         return -1;

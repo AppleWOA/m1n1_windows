@@ -18,17 +18,17 @@ jobs:
             compiler: gcc
           - os: ubuntu-latest
             compiler: llvm
-          - os: macos-13
-            compiler: llvm-brew
           - os: macos-14
+            compiler: llvm-brew
+          - os: macos-15
             compiler: llvm-brew
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.9'
 

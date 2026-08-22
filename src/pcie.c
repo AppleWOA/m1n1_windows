@@ -35,12 +35,13 @@
 
 /* PHY registers */
 
-#define APCIE_PHY_CTRL         0x000
-#define APCIE_PHY_CTRL_CLK0REQ BIT(0)
-#define APCIE_PHY_CTRL_CLK1REQ BIT(1)
-#define APCIE_PHY_CTRL_CLK0ACK BIT(2)
-#define APCIE_PHY_CTRL_CLK1ACK BIT(3)
-#define APCIE_PHY_CTRL_RESET   BIT(7)
+#define APCIE_PHY_CTRL             0x000
+#define APCIE_PHY_CTRL_CLK0REQ     BIT(0)
+#define APCIE_PHY_CTRL_CLK1REQ     BIT(1)
+#define APCIE_PHY_CTRL_CLK0ACK     BIT(2)
+#define APCIE_PHY_CTRL_CLK1ACK     BIT(3)
+#define APCIE_PHY_CTRL_RESET_T8103 BIT(7)
+#define APCIE_PHY_CTRL_RESET_T8132 BIT(4)
 
 #define APCIE_PHYIF_CTRL     0x024
 #define APCIE_PHYIF_CTRL_RUN BIT(0)
@@ -137,15 +138,20 @@ const struct fuse_bits pcie_fuse_bits_t8112[] = {
 enum apcie_type {
     APCIE_T81XX = 0,
     APCIE_T602X = 1,
+    APCIE_T8122 = 2,
+    APCIE_T6031 = 3,
+    APCIE_T8132 = 4,
 };
 
 struct reg_info {
     enum apcie_type type;
+    enum apcie_type compat;
     int shared_reg_count;
     int config_idx;
     int rc_idx;
     int phy_common_idx;
     int phy_idx;
+    u32 phy_ctrl_reset;
     int phy_ip_idx;
     int axi_idx;
     int fuse_idx;
@@ -154,11 +160,13 @@ struct reg_info {
 
 static const struct reg_info regs_t8xxx_t600x = {
     .type = APCIE_T81XX,
+    .compat = APCIE_T81XX,
     .shared_reg_count = 6,
     .config_idx = 0,
     .rc_idx = 1,
     .phy_common_idx = -1,
     .phy_idx = 2,
+    .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     .phy_ip_idx = 3,
     .axi_idx = 4,
     .fuse_idx = 5,
@@ -166,15 +174,58 @@ static const struct reg_info regs_t8xxx_t600x = {
 
 static const struct reg_info regs_t602x = {
     .type = APCIE_T602X,
+    .compat = APCIE_T602X,
     .shared_reg_count = 8,
     .config_idx = 0,
     .rc_idx = 1,
     // 2 = phy unknown?
     .phy_common_idx = 3,
     .phy_idx = 4,
+    .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
     .phy_ip_idx = 5,
     .axi_idx = 6,
     .fuse_idx = 7,
+};
+
+static const struct reg_info regs_t8122 = {
+    .type = APCIE_T8122,
+    .compat = APCIE_T8122,
+    .shared_reg_count = 7,
+    .config_idx = 0,
+    .rc_idx = 1,
+    .phy_common_idx = 2,
+    .phy_idx = 2,
+    .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
+    .phy_ip_idx = 3,
+    .axi_idx = 4,
+    .fuse_idx = 5,
+};
+
+static const struct reg_info regs_t8132 = {
+    .type = APCIE_T8132,
+    .compat = APCIE_T8122,
+    .shared_reg_count = 7,
+    .config_idx = 0,
+    .rc_idx = 1,
+    .phy_common_idx = 2,
+    .phy_idx = 2,
+    .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8132,
+    .phy_ip_idx = 3,
+    .axi_idx = 4,
+    .fuse_idx = 5,
+};
+
+static const struct reg_info regs_t6031 = {
+    .type = APCIE_T6031,
+    .compat = APCIE_T8122,
+    .shared_reg_count = 8,
+    .config_idx = 0,
+    .rc_idx = 1,
+    .phy_common_idx = 2,
+    .phy_idx = 2,
+    .phy_ctrl_reset = APCIE_PHY_CTRL_RESET_T8103,
+    .phy_ip_idx = 3,
+    .axi_idx = 4,
 };
 
 static bool pcie_initialized = false;
@@ -191,6 +242,7 @@ enum PCIE_CONTROLLERS {
 struct state {
     int num_phys;
     u64 rc_base;
+    u64 axi_base;
     u64 phy_common_base;
     u64 phy_base[MAX_PHYS];
     u64 phy_ip_base[MAX_PHYS];
@@ -236,10 +288,30 @@ static int pcie_init_controller(int controller, const char *path)
         fuse_bits = pcie_fuse_bits_t8112;
         state->pcie_regs = &regs_t8xxx_t600x;
         printf("pcie: Initializing t8112 PCIe controller\n");
+    } else if (adt_is_compatible(adt, adt_offset, "apcie,t8122")) {
+        fuse_bits = NULL;
+        state->pcie_regs = &regs_t8122;
+        printf("pcie: Initializing t8122 PCIe controller\n");
+    } else if (adt_is_compatible(adt, adt_offset, "apcie,t6030")) {
+        fuse_bits = NULL;
+        state->pcie_regs = &regs_t8122;
+        printf("pcie: Initializing t6030 PCIe controller\n");
     } else if (adt_is_compatible(adt, adt_offset, "apcie,t6020")) {
         fuse_bits = NULL;
         state->pcie_regs = &regs_t602x;
         printf("pcie: Initializing t6020 PCIe controller\n");
+    } else if (adt_is_compatible(adt, adt_offset, "apcie,t6031")) {
+        fuse_bits = NULL;
+        state->pcie_regs = &regs_t6031;
+        printf("pcie: Initializing t6031 PCIe controller\n");
+    } else if (adt_is_compatible(adt, adt_offset, "apcie,t8132")) {
+        fuse_bits = NULL;
+        state->pcie_regs = &regs_t8132;
+        printf("pcie: Initializing t8132 PCIe controller\n");
+    } else if (adt_is_compatible(adt, adt_offset, "apcie,t6040")) {
+        fuse_bits = NULL;
+        state->pcie_regs = &regs_t8132;
+        printf("pcie: Initializing t6040 PCIe controller\n");
     } else if (adt_is_compatible(adt, adt_offset, "apcie-ge,t6020")) {
         u32 lane_cfg;
         fuse_bits = NULL;
@@ -287,11 +359,16 @@ static int pcie_init_controller(int controller, const char *path)
         return -1;
     }
 
+    if (adt_get_reg(adt, adt_path, "reg", state->pcie_regs->axi_idx, &state->axi_base, NULL)) {
+        printf("pcie: Error getting reg with index %d for %s\n", state->pcie_regs->axi_idx, path);
+        return -1;
+    }
+
     if (state->pcie_regs->phy_common_idx != -1) {
         if (adt_get_reg(adt, adt_path, "reg", state->pcie_regs->phy_common_idx,
                         &state->phy_common_base, NULL)) {
-            printf("pcie: Error getting reg with index %d for %s\n", state->pcie_regs->phy_idx,
-                   path);
+            printf("pcie: Error getting reg with index %d for %s\n",
+                   state->pcie_regs->phy_common_idx, path);
             return -1;
         }
     } else {
@@ -308,6 +385,13 @@ static int pcie_init_controller(int controller, const char *path)
         printf("pcie: Error getting reg with index %d for %s\n", state->pcie_regs->phy_ip_idx,
                path);
         return -1;
+    }
+
+    if (state->pcie_regs->compat == APCIE_T8122) {
+        // The T8122 init seems very similar to the T602X, with different offsets,
+        // and with reg[2], [3] and [4] coalesced to reg[2] in the ADT.
+        state->phy_base[0] = state->phy_base[0] + 0x8000;
+        state->phy_common_base += 0x4000;
     }
 
     for (int phy = 1; phy < state->num_phys; phy++) {
@@ -342,7 +426,9 @@ static int pcie_init_controller(int controller, const char *path)
         return -1;
     }
 
-    if (tunables_apply_local(path, "apcie-axi2af-tunables", state->pcie_regs->axi_idx)) {
+    if (!adt_getprop(adt, adt_offset, "apcie-axi2af-tunables", NULL)) {
+        printf("pcie: No axi2af tunables\n");
+    } else if (tunables_apply_local(path, "apcie-axi2af-tunables", state->pcie_regs->axi_idx)) {
         printf("pcie: Error applying %s for %s\n", "apcie-axi2af-tunables", path);
         return -1;
     }
@@ -369,7 +455,7 @@ static int pcie_init_controller(int controller, const char *path)
         return -1;
     }
 
-    if (state->pcie_regs->type == APCIE_T602X) {
+    if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->type == APCIE_T6031) {
         if (poll32(state->phy_common_base + APCIE_PHYCMN_CLK, APCIE_PHYCMN_CLK_100MHZ,
                    APCIE_PHYCMN_CLK_100MHZ, 250000)) {
             printf("pcie: Reference clock not available\n");
@@ -392,14 +478,15 @@ static int pcie_init_controller(int controller, const char *path)
             return -1;
         }
 
-        clear32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_RESET);
+        clear32(state->phy_base[phy] + APCIE_PHY_CTRL, state->pcie_regs->phy_ctrl_reset);
         udelay(1);
 
         /* ??? */
         if (state->pcie_regs->type == APCIE_T81XX) {
             set32(state->rc_base + APCIE_PHYIF_CTRL, APCIE_PHYIF_CTRL_RUN);
             udelay(1);
-        } else if (state->pcie_regs->type == APCIE_T602X) {
+        } else if (state->pcie_regs->type == APCIE_T602X ||
+                   state->pcie_regs->compat == APCIE_T8122) {
             set32(state->phy_base[phy] + 4, 0x01);
         }
 
@@ -433,12 +520,12 @@ static int pcie_init_controller(int controller, const char *path)
             return -1;
         }
 
-        if (state->pcie_regs->type == APCIE_T602X) {
+        if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->compat == APCIE_T8122) {
             set32(state->phy_base[phy] + 4, 0x10);
         }
     }
 
-    if (state->pcie_regs->type == APCIE_T602X) {
+    if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->compat == APCIE_T8122) {
         mask32(state->phy_common_base + APCIE_PHYCMN_CLK, APCIE_PHYCMN_CLK_MODE,
                FIELD_PREP(APCIE_PHYCMN_CLK_MODE, 1));
 
@@ -449,7 +536,11 @@ static int pcie_init_controller(int controller, const char *path)
             return -1;
         }
         for (int phy = 0; phy < state->num_phys; phy++) {
-            set32(state->phy_base[phy] + APCIE_PHY_CTRL, 0x300);
+            if (state->pcie_regs->type == APCIE_T602X) {
+                set32(state->phy_base[phy] + APCIE_PHY_CTRL, 0x300);
+            } else if (state->pcie_regs->compat == APCIE_T8122) {
+                set32(state->phy_base[phy] + APCIE_PHY_CTRL, 0x200);
+            }
         }
         write32(state->rc_base + 0x54, 0x140);
         write32(state->rc_base + 0x50, 0x1);
@@ -457,9 +548,11 @@ static int pcie_init_controller(int controller, const char *path)
             printf("pcie: Failed to initialize RC thing\n");
             return -1;
         }
-        if (controller == APCIE)
-            clear32(state->rc_base + 0x3c, 0x1);
-        pmgr_adt_power_disable_index(path, 1);
+        if (state->pcie_regs->type == APCIE_T602X) {
+            if (controller == APCIE)
+                clear32(state->rc_base + 0x3c, 0x1);
+            pmgr_adt_power_disable_index(path, 1);
+        }
     }
 
     for (u32 port = 0; port < state->port_count; port++) {
@@ -472,7 +565,7 @@ static int pcie_init_controller(int controller, const char *path)
 
         switch (controller) {
             case APCIE:
-                snprintf(bridge, sizeof(bridge), "/arm-io/apcie/pci-bridge%d", port);
+                snprintf(bridge, sizeof(bridge), "%s/pci-bridge%d", path, port);
                 break;
             case APCIE_GE0:
                 strcpy(bridge, "/arm-io/apcie-ge0/pci-ge0-bridge");
@@ -529,22 +622,42 @@ static int pcie_init_controller(int controller, const char *path)
             // ??????
             if (controller == APCIE)
                 write32(state->port_base[port] + 0x10, 0x2);
+        }
+
+        if (state->pcie_regs->type == APCIE_T6031) {
+            clear32(state->axi_base + 0x600, BIT(16));
+        }
+
+        if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->compat == APCIE_T8122) {
             write32(state->port_base[port] + 0x88, 0x110);
             write32(state->port_base[port] + 0x100, 0xffffffff);
             write32(state->port_base[port] + 0x148, 0xffffffff);
             write32(state->port_base[port] + 0x210, 0xffffffff);
             write32(state->port_base[port] + 0x80, 0x0);
             write32(state->port_base[port] + 0x84, 0x0);
-            write32(state->port_base[port] + 0x104, 0x7fffffff);
+            if (state->pcie_regs->type == APCIE_T602X) {
+                write32(state->port_base[port] + 0x104, 0x7fffffff);
+            } else if (state->pcie_regs->compat == APCIE_T8122) {
+                write32(state->port_base[port] + 0x104, 0xfffffff0);
+            }
             write32(state->port_base[port] + 0x124, 0x100);
             write32(state->port_base[port] + 0x16c, 0x0);
             write32(state->port_base[port] + 0x13c, 0x10);
             write32(state->port_base[port] + 0x800, 0x100100);
             write32(state->port_base[port] + 0x808, 0x1000ff);
             write32(state->port_base[port] + 0x82c, 0x0);
-            for (int i = 0; i < 512; i++)
+            if (state->pcie_regs->compat == APCIE_T8122) {
+                for (int i = 0; i < 16; i++) {
+                    write32(state->port_base[port] + 0x3000 + 4 * i, 0);
+                }
+            }
+            // It seems fine to write the full range (512) here.
+            for (int i = 0; i < 512; i++) {
                 write32(state->port_base[port] + APCIE_T602X_PORT_MSIMAP + 4 * i, 0);
-            write32(state->port_base[port] + 0x397c, 0x0);
+            }
+            if (state->pcie_regs->type == APCIE_T602X) {
+                write32(state->port_base[port] + 0x397c, 0x0);
+            }
             if (controller == APCIE)
                 write32(state->port_base[port] + 0x130, 0x3000000);
             else
@@ -553,7 +666,7 @@ static int pcie_init_controller(int controller, const char *path)
             write32(state->port_base[port] + 0x144, 0x253770);
             write32(state->port_base[port] + 0x21c, 0x0);
             write32(state->port_base[port] + 0x834, 0x0);
-            if (controller != APCIE)
+            if (controller != APCIE || state->pcie_regs->compat == APCIE_T8122)
                 write32(state->port_base[port] + 0x83c, 0x0);
         }
 
@@ -564,7 +677,7 @@ static int pcie_init_controller(int controller, const char *path)
 
         set32(state->port_base[port] + APCIE_PORT_APPCLK, APCIE_PORT_APPCLK_EN);
 
-        if (state->pcie_regs->type == APCIE_T602X) {
+        if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->compat == APCIE_T8122) {
             clear32(state->port_phy_base[port] + APCIE_PHY_CTRL,
                     APCIE_PHY_CTRL_CLK0REQ | APCIE_PHY_CTRL_CLK1REQ);
 
@@ -582,7 +695,11 @@ static int pcie_init_controller(int controller, const char *path)
                 return -1;
             }
 
-            clear32(state->port_phy_base[port] + APCIE_PHY_CTRL, 0x4000);
+            if (state->pcie_regs->type == APCIE_T602X) {
+                clear32(state->port_phy_base[port] + APCIE_PHY_CTRL, 0x4000);
+            } else if (state->pcie_regs->compat == APCIE_T8122) {
+                clear32(state->port_phy_base[port] + APCIE_PHY_CTRL, 0x10);
+            }
             set32(state->port_phy_base[port] + APCIE_PHY_CTRL, 0x200);
             set32(state->port_phy_base[port] + APCIE_PHY_CTRL, 0x400);
 
@@ -700,7 +817,7 @@ static int pcie_init_controller(int controller, const char *path)
         /* Make Designware PCIe Core registers readonly. */
         clear32(config_base + DWC_DBI_RO_WR, DWC_DBI_RO_WR_EN);
 
-        if (state->pcie_regs->type == APCIE_T602X) {
+        if (state->pcie_regs->type == APCIE_T602X || state->pcie_regs->type == APCIE_T6031) {
             write32(state->port_base[port] + 0x4020, 0x3);
             if (state->port_intr2axi_base[port])
                 write32(state->port_intr2axi_base[port] + 0x80, 0x1);
@@ -730,6 +847,7 @@ int pcie_init(void)
         return 0;
 
     success |= pcie_init_controller(APCIE, "/arm-io/apcie") == 0;
+    success |= pcie_init_controller(APCIE, "/arm-io/apcie0") == 0;
     success |= pcie_init_controller(APCIE_GE0, "/arm-io/apcie-ge0") == 0;
     success |= pcie_init_controller(APCIE_GE1, "/arm-io/apcie-ge1") == 0;
 
@@ -759,7 +877,7 @@ int pcie_shutdown(void)
         }
 
         for (int phy = 0; phy < state->num_phys; phy++) {
-            clear32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_RESET);
+            clear32(state->phy_base[phy] + APCIE_PHY_CTRL, state->pcie_regs->phy_ctrl_reset);
             clear32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK1REQ);
             clear32(state->phy_base[phy] + APCIE_PHY_CTRL, APCIE_PHY_CTRL_CLK0REQ);
         }

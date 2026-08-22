@@ -14,11 +14,14 @@
 #define ISP_VER_T6000 0xb3091
 #define ISP_VER_T8112 0xc1090
 #define ISP_VER_T6020 0xc3091
+#define ISP_VER_T8122 0xf1001
+#define ISP_VER_T603X 0xf3001
 
 // PMGR offset to enable to get the version info to work
 #define ISP_PMGR_T8103 0x4018
 #define ISP_PMGR_T6000 0x8
 #define ISP_PMGR_T6020 0x4008
+#define ISP_PMGR_T6031 0x4030
 
 static bool isp_initialized = false;
 static u64 heap_phys, heap_iova, heap_size, heap_top;
@@ -38,6 +41,7 @@ u64 isp_iova_base(void)
 {
     switch (chip_id) {
         case 0x6020 ... 0x6fff:
+        case 0x8122:
             return 0x10000000000;
         default:
             return 0;
@@ -80,13 +84,18 @@ int isp_init(void)
     switch (chip_id) {
         case T8103:
         case T8112:
+        case T8122:
             pmgr_off = ISP_PMGR_T8103;
             break;
         case T6000 ... T6002:
             pmgr_off = ISP_PMGR_T6000;
             break;
         case T6020 ... T6022:
+        case T6030:
             pmgr_off = ISP_PMGR_T6020;
+            break;
+        case T6031 ... T6034:
+            pmgr_off = ISP_PMGR_T6031;
             break;
         default:
             printf("isp: Unsupported SoC\n");
@@ -126,7 +135,7 @@ int isp_init(void)
                     heap_top = 0xe00000;
                     break;
                 case V13_5:
-                case V13_6_2:
+                case V13_6_1:
                     heap_top = 0xf00000;
                     break;
                 default:
@@ -137,8 +146,19 @@ int isp_init(void)
         case ISP_VER_T6020:
             switch (os_firmware.version) {
                 case V13_5:
-                case V13_6_2:
+                case V13_6_1:
                     heap_top = 0xf00000;
+                    break;
+                default:
+                    printf("isp: unsupported firmware\n");
+                    return -1;
+            }
+            break;
+        case ISP_VER_T603X:
+        case ISP_VER_T8122:
+            switch (os_firmware.version) {
+                case V14_7:
+                    heap_top = 0x1000000;
                     break;
                 default:
                     printf("isp: unsupported firmware\n");

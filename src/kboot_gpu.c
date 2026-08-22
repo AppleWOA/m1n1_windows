@@ -4,6 +4,7 @@
 #include "adt.h"
 #include "assert.h"
 #include "firmware.h"
+#include "malloc.h"
 #include "math.h"
 #include "pmgr.h"
 #include "soc.h"
@@ -36,6 +37,29 @@ struct aux_perf_states {
     u64 count;
     struct aux_perf_state states[];
 };
+
+int32_t rust_gpu_initdata_size(uint32_t compat_maj, uint32_t compat_min, size_t *data_a,
+                               size_t *data_b, size_t *globals);
+
+struct initdata_inputs {
+    size_t perf_state_table_count;
+    size_t perf_state_count;
+    const struct perf_state *c_perf_states;
+    uint32_t *max_pwr;
+    float *core_leak;
+    float *sram_leak;
+    float *cs_leak;
+    float *afr_leak;
+    size_t n_perf_states_cs;
+    const struct aux_perf_state *pstates_cs;
+    size_t n_perf_states_afr;
+    const struct aux_perf_state *pstates_afr;
+    uint32_t compat_maj;
+    uint32_t compat_min;
+};
+
+int32_t rust_fill_gpu_initdata(struct initdata_inputs *ins, void *data_a, void *data_b,
+                               void *globals);
 
 static int get_core_counts(u32 *count, u32 nclusters, u32 ncores)
 {
@@ -373,6 +397,26 @@ static int calc_power_t600x(u32 count, u32 table_count, const struct perf_state 
     return 0;
 }
 
+static int dt_set_resvmem(void *dt, const char *path, u64 base, u64 size)
+{
+    int node = fdt_path_offset(dt, path);
+    if (node < 0)
+        bail("FDT: GPU: failed to find %s node\n", path);
+
+    fdt64_t reg[2];
+
+    fdt64_st(&reg[0], base);
+    fdt64_st(&reg[1], size);
+
+    if (fdt_setprop_string(dt, node, "status", "okay"))
+        bail("FDT: GPU: failed to un-disable memory region");
+
+    if (fdt_setprop(dt, node, "reg", reg, sizeof(reg)))
+        bail("FDT: GPU: failed to set reg prop for %s\n", path);
+
+    return 0;
+}
+
 static int dt_set_region(void *dt, int sgx, const char *name, const char *path)
 {
     u64 base, size;
@@ -386,19 +430,7 @@ static int dt_set_region(void *dt, int sgx, const char *name, const char *path)
     if (ADT_GETPROP(adt, sgx, prop, &size) < 0 || !base)
         bail("ADT: GPU: failed to find %s property\n", prop);
 
-    int node = fdt_path_offset(dt, path);
-    if (node < 0)
-        bail("FDT: GPU: failed to find %s node\n", path);
-
-    fdt64_t reg[2];
-
-    fdt64_st(&reg[0], base);
-    fdt64_st(&reg[1], size);
-
-    if (fdt_setprop_inplace(dt, node, "reg", reg, sizeof(reg)))
-        bail("FDT: GPU: failed to set reg prop for %s\n", path);
-
-    return 0;
+    return dt_set_resvmem(dt, path, base, size);
 }
 
 int fdt_set_float_array(void *dt, int node, const char *name, float *val, int count)
@@ -511,21 +543,6 @@ int dt_set_gpu(void *dt)
     downstream_dtb |= fdt_node_check_compatible(dt, gpu, "apple,agx-t6021") == 0;
     downstream_dtb |= fdt_node_check_compatible(dt, gpu, "apple,agx-t6022") == 0;
 
-    if (!downstream_dtb) {
-        printf("FDT: no old style agx compatible found, disabling GPU node\n");
-        fdt_setprop_string(dt, gpu, "status", "disabled");
-        return 0;
-    }
-
-    int len;
-    const fdt32_t *opps_ph = fdt_getprop(dt, gpu, "operating-points-v2", &len);
-    if (!opps_ph || len != 4)
-        bail("FDT: GPU: operating-points-v2 not found\n");
-
-    int opps = fdt_node_offset_by_phandle(dt, fdt32_ld(opps_ph));
-    if (opps < 0)
-        bail("FDT: GPU: node for phandle %u not found\n", fdt32_ld(opps_ph));
-
     int sgx = adt_path_offset(adt, "/arm-io/sgx");
     if (sgx < 0)
         bail("ADT: GPU: /arm-io/sgx node not found\n");
@@ -592,68 +609,81 @@ int dt_set_gpu(void *dt)
     }
     printf("\n");
 
-    if (fdt_set_float_array(dt, gpu, "apple,core-leak-coef", core_leak, perf_state_table_count))
-        return -1;
-
-    if (fdt_set_float_array(dt, gpu, "apple,sram-leak-coef", sram_leak, perf_state_table_count))
-        return -1;
-
-    u32 i = 0;
-    int opp;
-    fdt_for_each_subnode(opp, dt, opps)
-    {
-        fdt32_t volts[MAX_CLUSTERS];
-
-        for (u32 j = 0; j < perf_state_table_count; j++) {
-            volts[j] = cpu_to_fdt32(perf_states[i + j * perf_state_count].volt * 1000);
-        }
-
-        if (i >= perf_state_count)
-            bail("FDT: GPU: Expected %d operating points, but found more\n", perf_state_count);
-
-        if (fdt_setprop_inplace(dt, opp, "opp-microvolt", &volts,
-                                sizeof(u32) * perf_state_table_count))
-            bail("FDT: GPU: Failed to set opp-microvolt for PS %d\n", i);
-
-        if (fdt_setprop_inplace_u64(dt, opp, "opp-hz", perf_states[i].freq))
-            bail("FDT: GPU: Failed to set opp-hz for PS %d\n", i);
-
-        if (fdt_setprop_inplace_u32(dt, opp, "opp-microwatt", max_pwr[i]))
-            bail("FDT: GPU: Failed to set opp-microwatt for PS %d\n", i);
-
-        i++;
-    }
-
-    if (i != perf_state_count)
-        bail("FDT: GPU: Expected %d operating points, but found %d\n", perf_state_count, i);
-
     if (has_cs_afr) {
-        int ret = fdt_set_aux_opp(dt, gpu, "apple,cs-opp", perf_states_cs, dies);
-        if (ret)
-            return ret;
-
-        if (fdt_set_float_array(dt, gpu, "apple,cs-leak-coef", cs_leak, dies))
-            return -1;
-
         printf("FDT: GPU: CS leakage table: ");
         for (u32 i = 0; i < dies; i++) {
             printf("%d.%03d ", (int)cs_leak[i], ((int)(cs_leak[i] * 1000) % 1000));
         }
         printf("\n");
-    }
-
-    if (has_cs_afr) {
-        int ret = fdt_set_aux_opp(dt, gpu, "apple,afr-opp", perf_states_afr, dies);
-        if (ret)
-            return ret;
-        if (fdt_set_float_array(dt, gpu, "apple,afr-leak-coef", afr_leak, dies))
-            return -1;
 
         printf("FDT: GPU: AFR leakage table: ");
         for (u32 i = 0; i < dies; i++) {
             printf("%d.%03d ", (int)afr_leak[i], ((int)(afr_leak[i] * 1000) % 1000));
         }
         printf("\n");
+    }
+
+    if (downstream_dtb) {
+        if (fdt_set_float_array(dt, gpu, "apple,core-leak-coef", core_leak, perf_state_table_count))
+            return -1;
+
+        if (fdt_set_float_array(dt, gpu, "apple,sram-leak-coef", sram_leak, perf_state_table_count))
+            return -1;
+
+        int len;
+        const fdt32_t *opps_ph = fdt_getprop(dt, gpu, "operating-points-v2", &len);
+        if (!opps_ph || len != 4)
+            bail("FDT: GPU: operating-points-v2 not found\n");
+
+        int opps = fdt_node_offset_by_phandle(dt, fdt32_ld(opps_ph));
+        if (opps < 0)
+            bail("FDT: GPU: node for phandle %u not found\n", fdt32_ld(opps_ph));
+
+        u32 i = 0;
+        int opp;
+        fdt_for_each_subnode(opp, dt, opps)
+        {
+            fdt32_t volts[MAX_CLUSTERS];
+
+            for (u32 j = 0; j < perf_state_table_count; j++) {
+                volts[j] = cpu_to_fdt32(perf_states[i + j * perf_state_count].volt * 1000);
+            }
+
+            if (i >= perf_state_count)
+                bail("FDT: GPU: Expected %d operating points, but found more\n", perf_state_count);
+
+            if (fdt_setprop_inplace(dt, opp, "opp-microvolt", &volts,
+                                    sizeof(u32) * perf_state_table_count))
+                bail("FDT: GPU: Failed to set opp-microvolt for PS %d\n", i);
+
+            if (fdt_setprop_inplace_u64(dt, opp, "opp-hz", perf_states[i].freq))
+                bail("FDT: GPU: Failed to set opp-hz for PS %d\n", i);
+
+            if (fdt_setprop_inplace_u32(dt, opp, "opp-microwatt", max_pwr[i]))
+                bail("FDT: GPU: Failed to set opp-microwatt for PS %d\n", i);
+
+            i++;
+        }
+
+        if (i != perf_state_count)
+            bail("FDT: GPU: Expected %d operating points, but found %d\n", perf_state_count, i);
+
+        if (has_cs_afr) {
+            int ret = fdt_set_aux_opp(dt, gpu, "apple,cs-opp", perf_states_cs, dies);
+            if (ret)
+                return ret;
+
+            if (fdt_set_float_array(dt, gpu, "apple,cs-leak-coef", cs_leak, dies))
+                return -1;
+        }
+
+        if (has_cs_afr) {
+            int ret = fdt_set_aux_opp(dt, gpu, "apple,afr-opp", perf_states_afr, dies);
+            if (ret)
+                return ret;
+            if (fdt_set_float_array(dt, gpu, "apple,afr-leak-coef", afr_leak, dies))
+                return -1;
+        }
     }
 
     if (dt_set_region(dt, sgx, "gfx-handoff", "/reserved-memory/uat-handoff"))
@@ -670,9 +700,6 @@ int dt_set_gpu(void *dt)
         return 0;
     }
 
-    if (firmware_set_fdt(dt, gpu, "apple,firmware-version", &os_firmware))
-        return -1;
-
     const struct fw_version_info *compat;
 
     switch (os_firmware.version) {
@@ -680,7 +707,7 @@ int dt_set_gpu(void *dt)
             compat = &fw_versions[V12_3];
             break;
         case V13_5B4:
-        case V13_6_2:
+        case V13_6_1:
             compat = &fw_versions[V13_5];
             break;
         default:
@@ -688,8 +715,73 @@ int dt_set_gpu(void *dt)
             break;
     }
 
-    if (firmware_set_fdt(dt, gpu, "apple,firmware-compat", compat))
+    if (downstream_dtb) {
+        if (firmware_set_fdt(dt, gpu, "apple,firmware-version", &os_firmware))
+            return -1;
+        if (firmware_set_fdt(dt, gpu, "apple,firmware-compat", compat))
+            return -1;
+    }
+    // Ignoring errors for old dts compat
+    firmware_set_fdt(dt, gpu, "apple,firmware-abi", compat);
+
+    size_t data_a_size, data_b_size, globals_size;
+    if (rust_gpu_initdata_size(compat->num[0], compat->num[1], &data_a_size, &data_b_size,
+                               &globals_size) == -1)
         return -1;
+
+    void *data_a = (void *)top_of_memory_alloc(ALIGN_UP(data_a_size, SZ_16K));
+    void *data_b = (void *)top_of_memory_alloc(ALIGN_UP(data_b_size, SZ_16K));
+    void *globals = (void *)top_of_memory_alloc(ALIGN_UP(globals_size, SZ_16K));
+    memset(data_a, 0, data_a_size);
+    memset(data_b, 0, data_b_size);
+    memset(globals, 0, globals_size);
+
+    size_t n_perf_states_cs = 0, n_perf_states_afr = 0;
+    const struct aux_perf_state *pstate_cs_raw = NULL, *pstate_afr_raw = NULL;
+
+    if (has_cs_afr) {
+        n_perf_states_cs = perf_states_cs->count;
+        n_perf_states_afr = perf_states_afr->count;
+        pstate_cs_raw = perf_states_cs->states;
+        pstate_afr_raw = perf_states_afr->states;
+    }
+    struct initdata_inputs ins = {
+        .perf_state_table_count = perf_state_table_count,
+        .perf_state_count = perf_state_count,
+        .c_perf_states = perf_states,
+        .max_pwr = max_pwr,
+        .core_leak = core_leak,
+        .sram_leak = sram_leak,
+        .cs_leak = cs_leak,
+        .afr_leak = afr_leak,
+        .n_perf_states_cs = n_perf_states_cs,
+        .pstates_cs = pstate_cs_raw,
+        .n_perf_states_afr = n_perf_states_afr,
+        .pstates_afr = pstate_afr_raw,
+        .compat_maj = compat->num[0],
+        .compat_min = compat->num[1],
+    };
+    if (rust_fill_gpu_initdata(&ins, data_a, data_b, globals) == -1)
+        return -1;
+
+    if (dt_set_resvmem(dt, "/reserved-memory/hw-cal-a", (u64)data_a, ALIGN_UP(data_a_size, SZ_16K)))
+        return 0; // Old dts.
+    if (dt_set_resvmem(dt, "/reserved-memory/hw-cal-b", (u64)data_b, ALIGN_UP(data_b_size, SZ_16K)))
+        return -1;
+    if (dt_set_resvmem(dt, "/reserved-memory/globals", (u64)globals,
+                       ALIGN_UP(globals_size, SZ_16K)))
+        return -1;
+
+    /* Save init data sizes for debugging */
+    // refresh gpu dt node offset after modifying the dt in dt_set_region()
+    gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0) {
+        printf("FDT: GPU: gpu alias not found in device tree\n");
+        return 0;
+    }
+    fdt_setprop_u32(dt, gpu, "debug,hw-cal-a-size", data_a_size);
+    fdt_setprop_u32(dt, gpu, "debug,hw-cal-b-size", data_b_size);
+    fdt_setprop_u32(dt, gpu, "debug,globals-size", globals_size);
 
     return 0;
 }

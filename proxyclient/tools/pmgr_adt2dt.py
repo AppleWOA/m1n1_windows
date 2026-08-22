@@ -7,6 +7,7 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 import argparse, pathlib
 
 from m1n1 import adt
+from m1n1.utils import align_up
 
 parser = argparse.ArgumentParser(description='Convert ADT PMGR nodes to Device Tree format')
 parser.add_argument("-m", "--multidie", action="store_true")
@@ -33,24 +34,23 @@ def die_label(s):
     if args.multidie:
         return f"DIE_LABEL({s})"
     else:
-        return s
+        return f'"{s}"'
 
 for i, dev in enumerate(pmgr.devices):
     if dev.flags.no_ps:
         continue
-    ps = pmgr.ps_regs[dev.psreg]
-    block = pmgr.get_reg(ps.reg)
+    block = dt.pmgr_dev_get_block(dev)
     blocks.setdefault(block, []).append(dev)
-    offset = ps.offset + dev.psidx * 8
+    offset = dt.pmgr_dev_get_offset(dev)
     maxaddr[block[0]] = max(maxaddr.get(block[0], 0), offset)
 
 pmgr_compat = pmgr.compatible[0].split(",")[1]
-compatible = f'"apple,{pmgr_compat}-pmgr", "apple,pmgr", "syscon", "simple-mfd"'
-ps_compatible = f'"apple,{pmgr_compat}-pmgr-pwrstate", "apple,pmgr-pwrstate"'
+compatible = f'"apple,{pmgr_compat}-pmgr", "apple,t8103-pmgr", "syscon", "simple-mfd"'
+ps_compatible = f'"apple,{pmgr_compat}-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate"'
 
 for i, ((base, size), devices) in enumerate(sorted(blocks.items())):
 
-    size = min(size, (maxaddr[base] + 0x3fff) & ~0x3fff)
+    size = min(size, align_up(maxaddr[base] + 4, 0x4000))
 
     print(f"pmgr{i}: power-management@{base:x} {{")
     print(f"\tcompatible = {compatible};")
@@ -64,14 +64,12 @@ for i, ((base, size), devices) in enumerate(sorted(blocks.items())):
 for i, ((base, size), devices) in enumerate(sorted(blocks.items())):
     print(f"&pmgr{i} {{")
 
-    for dev in sorted(devices, key=lambda d: pmgr.ps_regs[d.psreg].offset + dev.psidx * 8):
+    for dev in sorted(devices, key=dt.pmgr_dev_get_addr):
         if dev.flags.no_ps:
             continue
 
-        ps = pmgr.ps_regs[dev.psreg]
-        offset = ps.offset + dev.psidx * 8
-        addr = pmgr.get_reg(ps.reg)[0] + offset
-        assert base <= addr <= (base + size)
+        offset = dt.pmgr_dev_get_offset(dev)
+        assert base <= (base + offset) <= (base + size)
 
         print()
         print(f"\t{die_node('ps_' + dev.name.lower())}: power-controller@{offset:x} {{")

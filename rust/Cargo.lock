@@ -4,13 +4,14 @@ version = 4
 
 [[package]]
 name = "bitflags"
-version = "2.9.3"
+version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34efbcccd345379ca2868b2b2c9d3782e9cc58ba87bc7d79d5b53d9c9ae6f25d"
+checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "fatfs"
 version = "0.4.0"
+source = "git+https://github.com/rafalh/rust-fatfs?rev=4eccb50d011146fbed20e133d33b22f3c27292e7#4eccb50d011146fbed20e133d33b22f3c27292e7"
 dependencies = [
  "bitflags",
  "log",
@@ -18,20 +19,32 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.27"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "rust"
 version = "0.1.0"
 dependencies = [
  "fatfs",
+ "sha1_smol",
  "uuid",
+ "versions",
 ]
 
 [[package]]
-name = "uuid"
-version = "1.17.0"
+name = "sha1_smol"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cf4199d1e5d15ddd86a694e4d0dffa9c323ce759fea589f00fef9d81cc1931d"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
+name = "uuid"
+version = "1.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf80a72845275afea99e7f2b434723d3bc7e38470fcd1c7ed39a599c73319a53"
+
+[[package]]
+name = "versions"
+version = "0.1.0"

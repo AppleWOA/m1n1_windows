@@ -25,6 +25,12 @@ struct usb_drd_regs {
 #error "USB_IODEV_COUNT is limited to 100 to prevent overflow in ADT path names"
 #endif
 
+#ifdef USE_DEBUG_USB
+#define FIRST_USB_IODEV 1
+#else
+#define FIRST_USB_IODEV 0
+#endif
+
 // length of the format string is is used as buffer size
 // limits the USB instance numbers to reasonable 2 digits
 #define FMT_DART_PATH        "/arm-io/dart-usb%u"
@@ -286,7 +292,7 @@ static int usb_init_i2c(const char *i2c_path)
         const char *name = adt_get_name(adt, node);
         if (!name || memcmp(name, "hpm", 3) || name[4] != '\0')
             continue; // unexpected hpm node name
-        u32 idx = name[3] - 30;
+        u32 idx = name[3] - '0';
         if (idx >= USB_IODEV_COUNT)
             continue; // unexpected hpm index
 
@@ -315,7 +321,7 @@ void usb_init(void)
         return;
 
     /*
-     * M3 models do not use i2c, but instead SPMI with a new controller.
+     * M3/M4 models do not use i2c, but instead SPMI with a new controller.
      * We can get USB going for now by just bringing up the phys.
      */
     if (adt_path_offset(adt, "/arm-io/nub-spmi-a0/hpm0") > 0) {
@@ -374,7 +380,7 @@ void usb_i2c_restore_irqs(const char *i2c_path, bool force)
         const char *name = adt_get_name(adt, node);
         if (!name || memcmp(name, "hpm", 3) || name[4] != '\0')
             continue; // unexpected hpm node name
-        u32 idx = name[3] - 30;
+        u32 idx = name[3] - '0';
         if (idx >= USB_IODEV_COUNT)
             continue; // unexpected hpm index
 
@@ -399,6 +405,19 @@ void usb_i2c_restore_irqs(const char *i2c_path, bool force)
 
 void usb_hpm_restore_irqs(bool force)
 {
+    /*
+     * Do not try to restore irqs on M3/M4 which don't use i2c
+     */
+    if (adt_path_offset(adt, "/arm-io/nub-spmi-a0/hpm0") > 0)
+        return;
+
+    /*
+     * Do not try to restore irqs on A7-A11 which don't use i2c
+     */
+    if (adt_path_offset(adt, "/arm-io/otgphyctrl") > 0 &&
+        adt_path_offset(adt, "/arm-io/usb-complex") > 0)
+        return;
+
     if (adt_is_compatible(adt, 0, "J180dAP"))
         usb_i2c_restore_irqs("/arm-io/i2c3", force);
     usb_i2c_restore_irqs("/arm-io/i2c0", force);
@@ -406,7 +425,7 @@ void usb_hpm_restore_irqs(bool force)
 
 void usb_iodev_init(void)
 {
-    for (int i = 0; i < USB_IODEV_COUNT; i++) {
+    for (int i = FIRST_USB_IODEV; i < USB_IODEV_COUNT; i++) {
         dwc3_dev_t *opaque;
         struct iodev *usb_iodev;
 
@@ -430,7 +449,7 @@ void usb_iodev_init(void)
 
 void usb_iodev_shutdown(void)
 {
-    for (int i = 0; i < USB_IODEV_COUNT; i++) {
+    for (int i = FIRST_USB_IODEV; i < USB_IODEV_COUNT; i++) {
         struct iodev *usb_iodev = iodev_unregister_device(IODEV_USB0 + i);
         if (!usb_iodev)
             continue;

@@ -10,7 +10,16 @@ p.smp_start_secondaries()
 
 tfreq = u.mrs(CNTFRQ_EL0)
 
-TEST_CPUS = [1, 4]
+TEST_CPUS = []
+CLUSTER_TYPES = []
+for cpu in u.adt["/cpus"]:
+    if cpu.cpu_id == 0 or cpu.state == 'running':
+        continue
+    if cpu.cluster_type not in CLUSTER_TYPES:
+        TEST_CPUS.append(cpu.cpu_id)
+        CLUSTER_TYPES.append(cpu.cluster_type)
+
+print(f"testing CPU p-state latencies on cores: {TEST_CPUS}")
 
 CLUSTER_PSTATE = 0x20020
 CLUSTER_STATUS = 0x20050
@@ -25,7 +34,7 @@ if chip_id in (0x8103, 0x6000, 0x6001, 0x6002):
 
     MAX_PSTATE = [5, 15]
 
-elif chip_id in (0x8121, 0x6020, 0x6021, 0x6022):
+elif chip_id in (0x8112, 0x6020, 0x6021, 0x6022):
     CREG = [
         0x210e00000,
         0x211e00000,
@@ -37,6 +46,9 @@ elif chip_id in (0x8121, 0x6020, 0x6021, 0x6022):
         MAX_PSTATE = [7, 17]
 
 code = u.malloc(0x1000)
+
+make_imm = lambda x : x & (0b11111 << (x.bit_length() - 5))
+eigthy_six_us = make_imm(round(87 * (tfreq / 1_000_000)))
 
 util = asm.ARMAsm(f"""
 bench:
@@ -52,11 +64,11 @@ bench:
 signal_and_write:
     sev
     mrs x2, CNTPCT_EL0
-    add x2, x2, #0x800
+    add x2, x2, #{hex(eigthy_six_us)}
 1:
     mrs x3, CNTPCT_EL0
-    sub x4, x3, x2
-    cbnz x4, 1b
+    cmp x3, x2
+    blt 1b
     str x1, [x0]
     mov x0, x3
     ret

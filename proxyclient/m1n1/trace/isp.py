@@ -177,26 +177,16 @@ class ISPTracer(ADTDevTracer):
 
     def __init__(self, hv, dev_path, dart_dev_path, verbose):
         super().__init__(hv, dev_path, verbose)
-        hv.p.pmgr_adt_clocks_enable(dart_dev_path)
+        hv.p.pmgr_adt_power_enable(dart_dev_path)
         self.dart_tracer = DARTTracer(hv, dart_dev_path, verbose=0)
         self.dart_tracer.start()
         self.dart = self.dart_tracer.dart
         self.iova_base = 0
         chip_id = hv.adt["/chosen"].chip_id
-        if 0x6020 <= chip_id <= 0x6fff:
+        if 0x6020 <= chip_id <= 0x6fff or chip_id == 0x8122:
             self.iova_base = 0x100_0000_0000
 
-        self.ignored_ranges = [
-            (0x22c0e8000, 0x4000), # dart 1
-            (0x22c0f4000, 0x4000), # dart 2
-            (0x22c0fc000, 0x4000), # dart 3
-            (0x3860e8000, 0x4000), # dart 1
-            (0x3860f4000, 0x4000), # dart 2
-            (0x3860fc000, 0x4000), # dart 3
-            (0x22c4a8000, 0x4000), # dart 1
-            (0x22c4b4000, 0x4000), # dart 2
-            (0x22c4bc000, 0x4000), # dart 3
-        ]
+        self.ignored_ranges = [hv.adt[dart_dev_path].get_reg(i) for i in range(6)]
 
         self.table = None
         self.num_chans = 0
@@ -220,6 +210,7 @@ class ISPTracer(ADTDevTracer):
                 self.log(f"ISPIPC: {str(chan)}")
             self.log("======== END OF CHANNEL TABLE ========")
     r_ISP_GPIO_0_T8112 = r_ISP_GPIO_0
+    r_ISP_GPIO_0_T6031 = r_ISP_GPIO_0
 
     def r_ISP_IRQ_INTERRUPT(self, val):
         #self.log("ISP_IRQ_INTERRUPT r32: 0x%x" % (val.value))
@@ -234,6 +225,8 @@ class ISPTracer(ADTDevTracer):
         self.table.get_last_tx_commands(int(val.value))
         #self.log(f"========  END DOORBELL  ========")
     w_ISP_IRQ_DOORBELL_T8112 = w_ISP_IRQ_DOORBELL
+    w_ISP_IRQ_DOORBELL_T8122 = w_ISP_IRQ_DOORBELL
+    w_ISP_IRQ_DOORBELL_T6031 = w_ISP_IRQ_DOORBELL
 
     def w_ISP_GPIO_0(self, val):
         self.log("ISP_GPIO_0 w32: 0x%x" % (val.value))
@@ -244,6 +237,7 @@ class ISPTracer(ADTDevTracer):
             x = ISPIPCBootArgs.parse(bootargs[:ISPIPCBootArgs.sizeof()])
             self.log(x)
     w_ISP_GPIO_0_T8112 = w_ISP_GPIO_0
+    w_ISP_GPIO_0_T6031 = w_ISP_GPIO_0
 
     def ioread(self, iova, size):
         iova |= self.iova_base

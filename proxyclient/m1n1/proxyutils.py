@@ -40,10 +40,16 @@ VERSION_MAP = {
 
 class ProxyUtils(Reloadable):
     CODE_BUFFER_SIZE = 0x10000
-    def __init__(self, p, heap_size=1024 * 1024 * 1024):
+    def __init__(self, p, heap_size=1024 * 1024 * 1024, m1n1_heap=128 * 1024 * 1024):
         self.iface = p.iface
         self.proxy = p
         self.base = p.get_base()
+
+        try:
+            self.cpu_features = p.get_cpu_features()
+        except ProxyRemoteError:
+            pass
+
         (self.ba_addr, self.ba_rev) = p.get_bootargs_rev()
 
         if self.ba_rev <= 1:
@@ -70,7 +76,11 @@ class ProxyUtils(Reloadable):
         if os.environ.get("M1N1HEAP", ""):
             self.heap_base = int(os.environ.get("M1N1HEAP", ""), 16)
 
-        self.heap_base += 128 * 1024 * 1024 # We leave 128MB for m1n1 heap
+        self.heap_base += m1n1_heap
+        try:
+            p.heapblock_set_limit(self.heap_base)
+        except ProxyRemoteError:
+            pass
         self.heap_top = self.heap_base + self.heap_size
         self.heap = Heap(self.heap_base, self.heap_top)
         self.proxy.heap = self.heap
@@ -87,6 +97,8 @@ class ProxyUtils(Reloadable):
         self.simd_buf = self.malloc(32 * 16)
         self.simd_type = None
         self.simd = None
+
+        self.glk_arg_buf = self.malloc(16)
 
         self.mmu_off = False
 
@@ -267,7 +279,7 @@ class ProxyUtils(Reloadable):
         self.iface.writemem(adt_base, self.adt_data)
 
     def disassemble_at(self, start, size, pc=None, vstart=None, sym=None):
-        '''disassemble len bytes of memory from start
+        '''disassemble size bytes of memory from start
          optional pc address will mark that line with a '*' '''
         code = struct.unpack(f"<{size // 4}I", self.iface.readmem(start, size))
         if vstart is None:
@@ -416,6 +428,14 @@ class ProxyUtils(Reloadable):
     @property
     def sfr_version(self):
         return self.get_version(self.adt["/chosen"].system_firmware_version)
+
+    def get_gigalocker(self):
+        self.proxy.nvme_init()
+        self.proxy.read_gigalocker(self.glk_arg_buf)
+        ptr, size = struct.unpack('QQ', self.iface.readmem(self.glk_arg_buf, 16))
+        data = self.iface.readmem(ptr, size)
+        self.proxy.free_gigalocker(self.glk_arg_buf)
+        return data
 
 class LazyADT:
     def __init__(self, utils):

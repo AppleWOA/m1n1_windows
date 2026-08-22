@@ -1,0 +1,111 @@
+# This is a basic workflow to help you get started with Actions
+
+name: release
+
+# Controls when the action will run.
+on:
+  # Triggers the workflow on main branch. Build errors are catched in the
+  # build workflow so failures here are likely caused by the external
+  # sources. No need to run this on pull-requests unless this file is changed.
+  push:
+    branches: [ main, 'releases/**' ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+    paths: [ .github/workflows/release.yml ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  release-binaries:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Checkout linux
+        uses: actions/checkout@v7
+        with:
+          repository: AsahiLinux/linux
+          ref: 'asahi'
+          path: linux
+          sparse-checkout: 'arch/arm64/boot/dts/apple/'
+          fetch-tags: 'true'
+
+      - name: Checkout u-boot
+        uses: actions/checkout@v7
+        with:
+          repository: AsahiLinux/u-boot
+          ref: 'asahi-releng'
+          path: u-boot
+
+      - name: Install aarch64-linux-gnu- toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+                               gcc-aarch64-linux-gnu \
+                               libgnutls28-dev \
+                               device-tree-compiler
+
+      - name: Install aarch64-unknown-none-softfloat rust target
+        run: |
+          rustup target install aarch64-unknown-none-softfloat
+
+      # env vars to include date and kernel tag in artifact name
+      - name: Export git info
+        shell: bash
+        run: |
+          echo "KERNEL_REF=$(git --git-dir=linux/.git describe --tags --always)" >> $GITHUB_ENV
+          if [ ${{ github.ref_type }} = "tag" ]; then
+              echo "M1N1_REF=${{ github.ref_name }}" | tr ';,<>/|"' '[_*]' >> $GITHUB_ENV
+              echo "GIT_DATE=${{ github.ref_name }}" | tr ';,<>/|"' '[_*]' >> $GITHUB_ENV
+          else
+              SHA=${{ github.sha }}
+              echo "M1N1_REF=${{ github.ref_name }}-${SHA:0:10}" | tr ';,<>/|"' '[_*]' >> $GITHUB_ENV
+              echo "GIT_DATE=$(git log -1 --format=%cd --date=format:%Y%m%d)" >> $GITHUB_ENV
+          fi
+
+      - name: Build
+        run: make -k -j2 ARCH=aarch64-linux-gnu- RELEASE=1
+
+      - name: Archive m1n1.bin
+        uses: actions/upload-artifact@v7
+        with:
+          name: m1n1-stage2-${{ env.M1N1_REF }}
+          path: |
+            build/m1n1.bin
+
+      - name: Update u-boot apple device trees
+        run: |
+          cp -f linux/arch/arm64/boot/dts/apple/*.dts \
+                linux/arch/arm64/boot/dts/apple/*.dtsi \
+                linux/arch/arm64/boot/dts/apple/*.h \
+                u-boot/dts/upstream/src/arm64/apple/
+
+      - name: Build u-boot
+        run: |
+          cd u-boot
+          make CROSS_COMPILE=aarch64-linux-gnu- apple_m1_defconfig
+          make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm -k -j2
+
+      - name: Create m1n1 uefi only boot.bin
+        run: |
+          mkdir -p out/esp/m1n1/
+          gzip -k u-boot/u-boot-nodtb.bin
+          cat build/m1n1.bin \
+              u-boot/dts/upstream/src/arm64/apple/t60*.dtb \
+              u-boot/dts/upstream/src/arm64/apple/t81*.dtb \
+              u-boot/u-boot-nodtb.bin.gz \
+              > out/esp/m1n1/boot.bin
+          cd out
+          zip -r uefi-only-${{ env.GIT_DATE }}-${{ env.KERNEL_REF }}.zip esp
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-uefi-only-${{ env.GIT_DATE }}-${{ env.KERNEL_REF }}
+          path: |
+            out/uefi-only-${{ env.GIT_DATE }}-${{ env.KERNEL_REF }}.zip

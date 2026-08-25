@@ -9,3 +9,9 @@ __pycache__
 /rust/target
 .idea
 .vscode/
+
+# The NT-for-ASi project absolutely refuses to entertain even the idea of AI slop, so these
+# files are *not* allowed in this repository at all.
+AGENTS.md
+CLAUDE.md
+GEMINI.md
